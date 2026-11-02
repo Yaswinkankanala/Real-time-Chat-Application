@@ -2,7 +2,18 @@ const isDev = typeof window !== 'undefined' && (window.location.port === '5173' 
 const defaultBaseUrl = isDev
   ? 'http://localhost:5000/api'
   : (typeof window !== 'undefined' && window.location.origin ? `${window.location.origin}/api` : 'http://localhost:5000/api');
-const BASE_URL = import.meta.env.VITE_API_URL || defaultBaseUrl;
+
+// Normalize API URL: ensures /api suffix and removes any trailing slash
+function normalizeApiUrl(url) {
+  if (!url) return defaultBaseUrl;
+  let clean = url.trim().replace(/\/+$/, '');
+  if (!clean.endsWith('/api')) {
+    clean += '/api';
+  }
+  return clean;
+}
+
+const BASE_URL = normalizeApiUrl(import.meta.env.VITE_API_URL);
 
 function getHeaders() {
   const token = localStorage.getItem('chatsphere_auth_token');

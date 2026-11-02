@@ -9,7 +9,18 @@ const isDev = typeof window !== 'undefined' && (window.location.port === '5173' 
 const defaultSocketUrl = isDev
   ? 'http://localhost:5000'
   : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'http://localhost:5000');
-const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_URL || defaultSocketUrl;
+
+function normalizeSocketUrl() {
+  const direct = import.meta.env.VITE_SOCKET_URL;
+  if (direct) return direct.trim().replace(/\/+$/, '');
+
+  const fromApi = import.meta.env.VITE_API_URL;
+  if (fromApi) return fromApi.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+
+  return defaultSocketUrl;
+}
+
+const SOCKET_SERVER_URL = normalizeSocketUrl();
 
 // Web Audio API notification chime generator (pleasant subtle notification)
 function playNotificationChime() {
