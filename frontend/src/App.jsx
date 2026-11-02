@@ -69,7 +69,7 @@ export default function App() {
     <>
       <AuthenticatedApp />
       {/* Onboarding profile completion modal for new Google OAuth sign-ins */}
-      <OnboardingModal isOpen={showOnboarding || !user.profileCompleted} />
+      <OnboardingModal isOpen={showOnboarding || !user?.profileCompleted} />
     </>
   );
 }

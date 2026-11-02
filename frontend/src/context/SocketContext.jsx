@@ -3,6 +3,7 @@ import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 import { api } from '../services/api';
 
+
 const SocketContext = createContext(null);
 
 const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
@@ -11,6 +12,15 @@ const defaultSocketUrl = isDev
   : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'http://localhost:5000');
 
 function normalizeSocketUrl() {
+  try {
+    if (typeof window !== 'undefined') {
+      const custom = localStorage.getItem('chatsphere_backend_url');
+      if (custom && custom.trim()) {
+        return custom.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+      }
+    }
+  } catch (e) {}
+
   const direct = import.meta.env.VITE_SOCKET_URL;
   if (direct) return direct.trim().replace(/\/+$/, '');
 

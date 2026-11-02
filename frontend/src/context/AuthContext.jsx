@@ -29,10 +29,15 @@ export const AuthProvider = ({ children }) => {
       }
 
       try {
-        const { user: userData } = await api.getMe();
-        setUser(userData);
-        if (!userData.profileCompleted) {
-          setShowOnboarding(true);
+        const res = await api.getMe();
+        const userData = res?.user || res;
+        if (userData && userData.id) {
+          setUser(userData);
+          if (!userData.profileCompleted) {
+            setShowOnboarding(true);
+          }
+        } else {
+          logout();
         }
       } catch (err) {
         console.warn('ChatSphere session expired or invalid:', err.message);
@@ -46,13 +51,21 @@ export const AuthProvider = ({ children }) => {
   }, [token]);
 
   const handleAuthSuccess = (res) => {
-    localStorage.setItem('chatsphere_auth_token', res.token);
-    setToken(res.token);
+    if (!res || !res.user) {
+      throw new Error(
+        res?.error || 'Authentication verification failed: Backend did not return a user profile. Please verify your Backend URL.'
+      );
+    }
+
+    if (res.token) {
+      localStorage.setItem('chatsphere_auth_token', res.token);
+      setToken(res.token);
+    }
     setUser(res.user);
     setAuthError(null);
 
     // If new user or profile incomplete, prompt onboarding
-    if (res.isNewUser || !res.user.profileCompleted) {
+    if (res.isNewUser || !res.user?.profileCompleted) {
       setShowOnboarding(true);
     } else {
       setShowOnboarding(false);
@@ -168,11 +181,14 @@ export const AuthProvider = ({ children }) => {
 
   const updateUserProfile = async (updates) => {
     const res = await api.updateProfile(updates);
-    setUser(res.user);
-    if (res.user.profileCompleted) {
-      setShowOnboarding(false);
+    if (res && res.user) {
+      setUser(res.user);
+      if (res.user.profileCompleted) {
+        setShowOnboarding(false);
+      }
+      return res.user;
     }
-    return res.user;
+    return null;
   };
 
   const logout = async () => {

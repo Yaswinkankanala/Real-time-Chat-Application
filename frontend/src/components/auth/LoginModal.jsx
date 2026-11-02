@@ -43,6 +43,13 @@ export default function LoginModal() {
   const [customApiKey, setCustomApiKey] = useState(firebaseConfig.apiKey || '');
   const [customProjectId, setCustomProjectId] = useState(firebaseConfig.projectId || '');
   const [customAppId, setCustomAppId] = useState(firebaseConfig.appId || '');
+  const [customBackendUrl, setCustomBackendUrl] = useState(() => {
+    try {
+      return localStorage.getItem('chatsphere_backend_url') || '';
+    } catch (e) {
+      return '';
+    }
+  });
   const [configSuccess, setConfigSuccess] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -102,6 +109,17 @@ export default function LoginModal() {
   };
 
   const saveCustomFirebase = () => {
+    let changed = false;
+
+    if (customBackendUrl !== undefined) {
+      if (customBackendUrl.trim()) {
+        localStorage.setItem('chatsphere_backend_url', customBackendUrl.trim());
+      } else {
+        localStorage.removeItem('chatsphere_backend_url');
+      }
+      changed = true;
+    }
+
     if (customApiKey && customProjectId) {
       const newConfig = {
         ...firebaseConfig,
@@ -112,6 +130,10 @@ export default function LoginModal() {
         appId: customAppId.trim() || `1:102938475610:web:${Math.random().toString(36).substring(2, 10)}`
       };
       localStorage.setItem('chatsphere_firebase_custom_config', JSON.stringify(newConfig));
+      changed = true;
+    }
+
+    if (changed) {
       setConfigSuccess(true);
       setTimeout(() => {
         window.location.reload();
@@ -121,6 +143,7 @@ export default function LoginModal() {
 
   const resetToDefaultFirebase = () => {
     localStorage.removeItem('chatsphere_firebase_custom_config');
+    localStorage.removeItem('chatsphere_backend_url');
     window.location.reload();
   };
 
@@ -206,7 +229,7 @@ export default function LoginModal() {
               className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2 flex items-center gap-1 font-medium"
             >
               <Settings className="w-3 h-3" />
-              <span>Firebase Keys</span>
+              <span>Server & Firebase Keys</span>
             </button>
           </div>
         </div>
@@ -217,7 +240,7 @@ export default function LoginModal() {
             <div className="flex justify-between items-center mb-2 font-semibold text-slate-100">
               <div className="flex items-center gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-indigo-400" />
-                <span>Firebase Authentication Setup</span>
+                <span>Backend Server & Firebase Config</span>
               </div>
               <button
                 type="button"
@@ -228,9 +251,22 @@ export default function LoginModal() {
               </button>
             </div>
             <p className="text-slate-400 mb-3 text-[11px] leading-relaxed">
-              Connect your Firebase Console project. Enable <strong>Google</strong> and <strong>Email/Password</strong> under <em>Build &gt; Authentication</em>.
+              If frontend and backend are deployed as separate Render services, configure your Backend URL below.
             </p>
             <div className="space-y-2 mb-3">
+              <div>
+                <label className="text-slate-200 block mb-1 text-[11px] font-semibold">Backend Server URL (Render Web Service)</label>
+                <input
+                  type="text"
+                  value={customBackendUrl}
+                  onChange={(e) => setCustomBackendUrl(e.target.value)}
+                  placeholder="https://chatsphere-backend.onrender.com"
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-indigo-500/40 text-slate-200 focus:outline-none focus:border-indigo-400 font-mono text-xs"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Paste your Render backend URL here (with or without /api).
+                </span>
+              </div>
               <div>
                 <label className="text-slate-300 block mb-1 text-[11px]">Firebase Web API Key</label>
                 <input
