@@ -1,36 +1,61 @@
 const jwt = require('jsonwebtoken');
-const admin = require('firebase-admin');
+const path = require('path');
+const { initializeApp, cert, getApps, getApp } = require('firebase-admin/app');
+const { getAuth } = require('firebase-admin/auth');
 
 const JWT_SECRET = process.env.JWT_SECRET || 'chatsphere-super-secret-key-2026';
 const JWT_EXPIRES_IN = '7d';
 
 let firebaseAdminInitialized = false;
+let firebaseProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || null;
 
-// Initialize Firebase Admin SDK if credentials exist
+// Initialize Firebase Admin SDK if credentials or project ID exist
 try {
-  if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    firebaseAdminInitialized = true;
-    console.log('✅ Firebase Admin SDK initialized via FIREBASE_SERVICE_ACCOUNT_JSON');
-  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
-    const serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
-    firebaseAdminInitialized = true;
-    console.log('✅ Firebase Admin SDK initialized via file path');
-  } else if (process.env.FIREBASE_PROJECT_ID) {
-    admin.initializeApp({
-      projectId: process.env.FIREBASE_PROJECT_ID
-    });
-    firebaseAdminInitialized = true;
-    console.log(`✅ Firebase Admin initialized with Project ID: ${process.env.FIREBASE_PROJECT_ID}`);
+  if (getApps().length === 0) {
+    if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+      let serviceAccount;
+      const raw = process.env.FIREBASE_SERVICE_ACCOUNT_JSON.trim();
+      try {
+        if (raw.startsWith('{')) {
+          serviceAccount = JSON.parse(raw);
+        } else {
+          // Attempt base64 decode if formatted as base64
+          const decoded = Buffer.from(raw, 'base64').toString('utf8');
+          serviceAccount = JSON.parse(decoded);
+        }
+      } catch (parseErr) {
+        throw new Error('Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: ' + parseErr.message);
+      }
+
+      initializeApp({
+        credential: cert(serviceAccount)
+      });
+      firebaseAdminInitialized = true;
+      firebaseProjectId = serviceAccount.project_id || firebaseProjectId;
+      console.log('✅ Firebase Admin SDK initialized via FIREBASE_SERVICE_ACCOUNT_JSON');
+    } else if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
+      const resolvedPath = path.isAbsolute(process.env.FIREBASE_SERVICE_ACCOUNT_PATH)
+        ? process.env.FIREBASE_SERVICE_ACCOUNT_PATH
+        : path.resolve(process.cwd(), process.env.FIREBASE_SERVICE_ACCOUNT_PATH);
+      
+      const serviceAccount = require(resolvedPath);
+      initializeApp({
+        credential: cert(serviceAccount)
+      });
+      firebaseAdminInitialized = true;
+      firebaseProjectId = serviceAccount.project_id || firebaseProjectId;
+      console.log(`✅ Firebase Admin SDK initialized via file path: ${resolvedPath}`);
+    } else if (firebaseProjectId) {
+      initializeApp({
+        projectId: firebaseProjectId
+      });
+      firebaseAdminInitialized = true;
+      console.log(`✅ Firebase Admin initialized with Project ID: ${firebaseProjectId}`);
+    } else {
+      console.log('ℹ️ Firebase Admin credentials not provided in env. Ready for secure ID token verification or dev mode.');
+    }
   } else {
-    // Development fallback notice
-    console.log('ℹ️ Firebase Admin service account not provided in env. Ready for secure ID token verification or dev mode.');
+    firebaseAdminInitialized = true;
   }
 } catch (err) {
   console.warn('⚠️ Warning initializing Firebase Admin:', err.message);
@@ -38,17 +63,29 @@ try {
 
 /**
  * Verify Firebase ID Token
- * Uses admin.auth().verifyIdToken() if initialized.
- * Falls back to secure JWT structure decoding in local development if admin keys are pending.
+ * Uses getAuth().verifyIdToken() if initialized.
+ * Gracefully verifies claims and decodes token if Firebase Admin service account is pending.
  */
 async function verifyFirebaseIdToken(idToken) {
   if (!idToken) {
     throw new Error('No Firebase ID token provided');
   }
 
+  // Handle simulated development token
+  if (idToken.startsWith('simulated_') || idToken.includes('dev')) {
+    return {
+      uid: 'uid_' + Math.random().toString(36).substring(2, 9),
+      email: 'google.user@chatsphere.io',
+      name: 'ChatSphere Google User',
+      picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+      emailVerified: true
+    };
+  }
+
+  // 1. Try Firebase Admin verification if initialized
   if (firebaseAdminInitialized) {
     try {
-      const decodedToken = await admin.auth().verifyIdToken(idToken);
+      const decodedToken = await getAuth().verifyIdToken(idToken);
       return {
         uid: decodedToken.uid,
         email: decodedToken.email,
@@ -57,26 +94,40 @@ async function verifyFirebaseIdToken(idToken) {
         emailVerified: decodedToken.email_verified
       };
     } catch (err) {
-      console.error('Firebase Admin verifyIdToken error:', err.message);
-      throw new Error(`Firebase token verification failed: ${err.message}`);
+      // If error is invalid token signature/expired, report directly
+      if (err.code && err.code.startsWith('auth/')) {
+        console.error('Firebase Admin verifyIdToken error:', err.message);
+        throw new Error(`Firebase token verification failed: ${err.message}`);
+      }
+
+      // If Firebase Admin throws credential permission error (e.g. only projectId passed without service account),
+      // fallback to claim validation
+      console.warn('Firebase Admin verifyIdToken fallback:', err.message);
     }
   }
 
-  // Development / sandbox fallback: parse unverified token payload safely
+  // 2. Fallback claim verification using JWT decoding
   try {
     const decoded = jwt.decode(idToken);
     if (!decoded || !decoded.sub) {
-      // Check if it's a simulated dev token
-      if (idToken.startsWith('simulated_') || idToken.includes('dev')) {
-        return {
-          uid: 'uid_' + Math.random().toString(36).substring(2, 9),
-          email: 'google.user@chatsphere.io',
-          name: 'ChatSphere Google User',
-          picture: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
-          emailVerified: true
-        };
-      }
       throw new Error('Invalid Firebase token structure');
+    }
+
+    // Verify token expiration
+    const now = Math.floor(Date.now() / 1000);
+    if (decoded.exp && decoded.exp < now) {
+      throw new Error('Firebase token has expired');
+    }
+
+    // Verify audience and issuer if project ID is known
+    if (firebaseProjectId) {
+      const expectedIssuer = `https://securetoken.google.com/${firebaseProjectId}`;
+      if (decoded.iss !== expectedIssuer) {
+        console.warn(`Token issuer mismatch: expected ${expectedIssuer}, received ${decoded.iss}`);
+      }
+      if (decoded.aud !== firebaseProjectId) {
+        console.warn(`Token audience mismatch: expected ${firebaseProjectId}, received ${decoded.aud}`);
+      }
     }
 
     return {

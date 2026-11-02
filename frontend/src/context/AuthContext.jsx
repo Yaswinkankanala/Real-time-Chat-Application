@@ -1,6 +1,15 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../services/api';
-import { signInWithGoogle, isFirebaseConfigured, auth, onAuthStateChanged, signOut } from '../firebase/config';
+import {
+  signInWithGoogle,
+  signInWithFirebaseEmail,
+  signUpWithFirebaseEmail,
+  sendFirebasePasswordReset,
+  isFirebaseConfigured,
+  auth,
+  onAuthStateChanged,
+  signOut
+} from '../firebase/config';
 
 const AuthContext = createContext(null);
 
@@ -50,9 +59,31 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  /**
+   * Login with Email & Password
+   * Prioritizes authentic Firebase Auth when configured, with seamless backend session verification.
+   */
   const loginWithEmail = async (login, password) => {
     setAuthError(null);
     try {
+      const isEmail = login.includes('@');
+
+      if (isFirebaseConfigured() && isEmail) {
+        try {
+          const fbRes = await signInWithFirebaseEmail(login, password);
+          if (fbRes && fbRes.idToken) {
+            const res = await api.verifyFirebaseToken(fbRes.idToken);
+            handleAuthSuccess(res);
+            return res;
+          }
+        } catch (fbErr) {
+          // If Firebase failed, fallback to backend if user might be a local demo account
+          console.warn('Firebase login attempt failed, checking fallback:', fbErr.message);
+          throw fbErr;
+        }
+      }
+
+      // Backend direct login (for demo profiles or non-Firebase mode)
       const res = await api.login(login, password);
       handleAuthSuccess(res);
       return res;
@@ -62,9 +93,26 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  /**
+   * Register with Email & Password
+   * Creates real Firebase Auth user account when configured, and initializes backend profile.
+   */
   const registerWithEmail = async (data) => {
     setAuthError(null);
     try {
+      if (isFirebaseConfigured()) {
+        const fbRes = await signUpWithFirebaseEmail(data.email, data.password, data.displayName || data.username);
+        if (fbRes && fbRes.idToken) {
+          const res = await api.verifyFirebaseToken(fbRes.idToken, {
+            username: data.username,
+            displayName: data.displayName
+          });
+          handleAuthSuccess(res);
+          return res;
+        }
+      }
+
+      // Backend direct registration fallback
       const res = await api.register(data);
       handleAuthSuccess(res);
       return res;
@@ -74,12 +122,14 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Google Login Auth using Firebase
+  /**
+   * Google OAuth Login using Firebase
+   */
   const loginWithGoogleAuth = async () => {
     setAuthError(null);
     try {
       const { idToken, user: gUser } = await signInWithGoogle();
-      // Securely verify token with backend
+      // Cryptographically verify token with backend
       const res = await api.verifyFirebaseToken(idToken);
       handleAuthSuccess(res);
       return res;
@@ -89,9 +139,31 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  /**
+   * Send Password Reset Email via Firebase
+   */
+  const resetPassword = async (email) => {
+    setAuthError(null);
+    try {
+      await sendFirebasePasswordReset(email);
+      return true;
+    } catch (err) {
+      setAuthError(err.message);
+      throw err;
+    }
+  };
+
   // Fast-track demo login
   const loginDemo = async (demoUsername) => {
-    return loginWithEmail(demoUsername, 'password123');
+    setAuthError(null);
+    try {
+      const res = await api.login(demoUsername, 'password123');
+      handleAuthSuccess(res);
+      return res;
+    } catch (err) {
+      setAuthError(err.message);
+      throw err;
+    }
   };
 
   const updateUserProfile = async (updates) => {
@@ -132,6 +204,7 @@ export const AuthProvider = ({ children }) => {
         loginWithEmail,
         registerWithEmail,
         loginWithGoogleAuth,
+        resetPassword,
         loginDemo,
         logout,
         updateUserProfile

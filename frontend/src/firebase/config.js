@@ -1,5 +1,15 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider, signInWithPopup, signInWithRedirect, onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  getAuth,
+  GoogleAuthProvider,
+  signInWithPopup,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  sendPasswordResetEmail,
+  onAuthStateChanged,
+  signOut
+} from 'firebase/auth';
 
 // Read custom stored config if user provided one in app settings
 const getStoredConfig = () => {
@@ -14,7 +24,7 @@ const getStoredConfig = () => {
 
 const customConfig = getStoredConfig();
 
-export const firebaseConfig = customConfig || {
+export let firebaseConfig = customConfig || {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDemoPlaceholderChatSphereKey2026",
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "chatsphere-app.firebaseapp.com",
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "chatsphere-app",
@@ -25,7 +35,8 @@ export const firebaseConfig = customConfig || {
 
 export const isFirebaseConfigured = () => {
   const cfg = getStoredConfig() || firebaseConfig;
-  return (
+  return Boolean(
+    cfg &&
     cfg.apiKey &&
     !cfg.apiKey.includes('Placeholder') &&
     cfg.projectId &&
@@ -37,25 +48,80 @@ let app;
 let auth;
 let googleProvider;
 
-try {
-  app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
-  auth = getAuth(app);
-  googleProvider = new GoogleAuthProvider();
-  googleProvider.setCustomParameters({ prompt: 'select_account' });
-} catch (error) {
-  console.warn('Firebase initialization warning:', error.message);
+export function initializeFirebase(config = firebaseConfig) {
+  try {
+    app = !getApps().length ? initializeApp(config) : getApp();
+    auth = getAuth(app);
+    googleProvider = new GoogleAuthProvider();
+    googleProvider.setCustomParameters({ prompt: 'select_account' });
+  } catch (error) {
+    console.warn('Firebase initialization warning:', error.message);
+  }
+}
+
+// Initial setup
+initializeFirebase();
+
+// Try to auto-load backend Firebase config if local is default placeholder
+if (typeof window !== 'undefined' && !isFirebaseConfigured()) {
+  const isDev = window.location.port === '5173' || window.location.port === '3000';
+  const apiUrl = import.meta.env.VITE_API_URL || (isDev ? 'http://localhost:5000/api' : `${window.location.origin}/api`);
+  
+  fetch(`${apiUrl}/auth/firebase-config`)
+    .then((r) => r.json())
+    .then((data) => {
+      if (data && data.configured && data.config) {
+        console.log('⚡ Loaded live Firebase credentials from backend environment');
+        localStorage.setItem('chatsphere_firebase_custom_config', JSON.stringify(data.config));
+        firebaseConfig = data.config;
+        initializeFirebase(data.config);
+      }
+    })
+    .catch(() => {
+      // Ignore background config check failure
+    });
 }
 
 export { auth, googleProvider, onAuthStateChanged, signOut };
 
 /**
- * Triggers authentic Firebase Google Popup Sign-In
- * Returns Firebase user object and authentic idToken
+ * Friendly error translator for Firebase Auth exceptions
+ */
+export function formatFirebaseAuthError(err) {
+  const code = err.code || '';
+  switch (code) {
+    case 'auth/popup-closed-by-user':
+    case 'auth/cancelled-popup-request':
+      return 'Sign-in popup was closed before completing. Please try again.';
+    case 'auth/unauthorized-domain':
+      return 'Unauthorized domain: Add this domain (or localhost) in Firebase Console -> Authentication -> Settings -> Authorized Domains.';
+    case 'auth/email-already-in-use':
+      return 'An account already exists with this email address. Please sign in instead.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Invalid email or password. Please verify your credentials.';
+    case 'auth/weak-password':
+      return 'Password must be at least 6 characters long.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/too-many-requests':
+      return 'Access temporarily blocked due to many failed attempts. Try again later.';
+    case 'auth/operation-not-allowed':
+      return 'This sign-in provider is not enabled in Firebase Console. Please enable Email/Password or Google.';
+    case 'auth/network-request-failed':
+      return 'Network connection failed. Please check your internet connection.';
+    default:
+      return err.message || 'Authentication failed. Please try again.';
+  }
+}
+
+/**
+ * Authentic Firebase Google Popup Sign-In
  */
 export async function signInWithGoogle() {
   if (!isFirebaseConfigured()) {
     console.info('Using local preview Google OAuth profile. Enter Firebase credentials in Settings to link live Firebase Console.');
-    // Simulated token accepted by backend verify endpoint
     return {
       isSimulated: true,
       idToken: 'simulated_dev_token_' + Math.random().toString(36).substring(2, 9),
@@ -83,13 +149,69 @@ export async function signInWithGoogle() {
       }
     };
   } catch (err) {
-    if (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request') {
-      throw new Error('Sign-in cancelled. Please try again.');
+    console.error('Google Sign-In Error:', err);
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+/**
+ * Authentic Firebase Email & Password Sign-In
+ */
+export async function signInWithFirebaseEmail(email, password) {
+  if (!isFirebaseConfigured()) {
+    return null; // Signals caller to use backend fallback
+  }
+
+  try {
+    const userCredential = await signInWithEmailAndPassword(auth, email.trim(), password);
+    const idToken = await userCredential.user.getIdToken();
+    return {
+      idToken,
+      user: userCredential.user
+    };
+  } catch (err) {
+    console.error('Firebase Email Sign-In Error:', err);
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+/**
+ * Authentic Firebase Email & Password Registration
+ */
+export async function signUpWithFirebaseEmail(email, password, displayName = '') {
+  if (!isFirebaseConfigured()) {
+    return null; // Signals caller to use backend fallback
+  }
+
+  try {
+    const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+    if (displayName && userCredential.user) {
+      await updateProfile(userCredential.user, { displayName }).catch(() => {});
     }
-    if (err.code === 'auth/unauthorized-domain') {
-      throw new Error('Unauthorized domain: Please add localhost and 127.0.0.1 to Authorized Domains in Firebase Console -> Authentication -> Settings.');
-    }
-    console.error('Google Sign-In Popup Error:', err);
-    throw err;
+    const idToken = await userCredential.user.getIdToken();
+    return {
+      idToken,
+      user: userCredential.user
+    };
+  } catch (err) {
+    console.error('Firebase Email Sign-Up Error:', err);
+    throw new Error(formatFirebaseAuthError(err));
+  }
+}
+
+/**
+ * Send Firebase Password Reset Email
+ */
+export async function sendFirebasePasswordReset(email) {
+  if (!isFirebaseConfigured()) {
+    throw new Error('Firebase is not configured yet. Set your Firebase project keys first.');
+  }
+
+  try {
+    await sendPasswordResetEmail(auth, email.trim());
+    return true;
+  } catch (err) {
+    console.error('Firebase Password Reset Error:', err);
+    throw new Error(formatFirebaseAuthError(err));
   }
 }

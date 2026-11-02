@@ -44,10 +44,10 @@ async function request(endpoint, options = {}) {
 
 export const api = {
   // Authentication
-  verifyFirebaseToken: (idToken) =>
+  verifyFirebaseToken: (idToken, extra = {}) =>
     request('/auth/verify', {
       method: 'POST',
-      body: { idToken }
+      body: { idToken, ...extra }
     }),
 
   login: (login, password) =>
