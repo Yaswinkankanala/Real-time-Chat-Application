@@ -5,7 +5,11 @@ import { api } from '../services/api';
 
 const SocketContext = createContext(null);
 
-const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
+const defaultSocketUrl = isDev
+  ? 'http://localhost:5000'
+  : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'http://localhost:5000');
+const SOCKET_SERVER_URL = import.meta.env.VITE_SOCKET_URL || defaultSocketUrl;
 
 // Web Audio API notification chime generator (pleasant subtle notification)
 function playNotificationChime() {

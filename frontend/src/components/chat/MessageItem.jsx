@@ -12,6 +12,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 
 const AVAILABLE_EMOJIS = ['👍', '❤️', '🔥', '🚀', '✨', '😂', '🎉'];
+const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
+const SERVER_URL = import.meta.env.VITE_SOCKET_URL || (isDev ? 'http://localhost:5000' : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'http://localhost:5000'));
 
 export default function MessageItem({ message }) {
   const { user } = useAuth();
@@ -130,13 +132,13 @@ export default function MessageItem({ message }) {
           <div className="mt-2.5 max-w-sm">
             {message.attachment.mimetype?.startsWith('image/') ? (
               <a
-                href={`http://localhost:5000${message.attachment.url}`}
+                href={`${SERVER_URL}${message.attachment.url}`}
                 target="_blank"
                 rel="noreferrer"
                 className="block group/att relative rounded-xl overflow-hidden border border-slate-700/60 max-h-60"
               >
                 <img
-                  src={`http://localhost:5000${message.attachment.url}`}
+                  src={`${SERVER_URL}${message.attachment.url}`}
                   alt={message.attachment.filename}
                   className="w-full h-full object-cover group-hover/att:scale-105 transition duration-300"
                 />
@@ -146,7 +148,7 @@ export default function MessageItem({ message }) {
               </a>
             ) : (
               <a
-                href={`http://localhost:5000${message.attachment.url}`}
+                href={`${SERVER_URL}${message.attachment.url}`}
                 download={message.attachment.filename}
                 className="flex items-center gap-3 p-3 rounded-xl bg-slate-900 border border-slate-800 hover:border-slate-700 transition"
               >

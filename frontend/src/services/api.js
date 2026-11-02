@@ -1,4 +1,8 @@
-const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
+const defaultBaseUrl = isDev
+  ? 'http://localhost:5000/api'
+  : (typeof window !== 'undefined' && window.location.origin ? `${window.location.origin}/api` : 'http://localhost:5000/api');
+const BASE_URL = import.meta.env.VITE_API_URL || defaultBaseUrl;
 
 function getHeaders() {
   const token = localStorage.getItem('chatsphere_auth_token');
