@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import { api } from '../../services/api';
+import { resolveAvatarUrl } from '../../utils/avatar';
 
 const QUICK_EMOJIS = ['😊', '😂', '🔥', '🚀', '👍', '❤️', '🎉', '💯', '👏', '✨'];
 
@@ -114,7 +115,7 @@ export default function MessageInput() {
           <div className="flex items-center gap-2 truncate">
             {attachment.mimetype?.startsWith('image/') ? (
               <img
-                src={attachment.url}
+                src={resolveAvatarUrl(attachment.url)}
                 alt="Upload preview"
                 className="w-10 h-10 object-cover rounded-lg"
               />

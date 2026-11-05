@@ -16,6 +16,7 @@ import MessageItem from './MessageItem';
 import MessageInput from './MessageInput';
 import FindPeopleModal from './FindPeopleModal';
 import AiChatSummaryModal from './AiChatSummaryModal';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
   const {
@@ -90,12 +91,10 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
           ) : (
             <div className="relative shrink-0">
               <img
-                src={
-                  activeTarget.details?.avatar ||
-                  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(activeTarget.details?.displayName || 'User')}`
-                }
+                src={resolveAvatarUrl(activeTarget.details?.avatar, activeTarget.details?.displayName)}
                 alt={activeTarget.details?.displayName}
                 className="w-9 h-9 rounded-full object-cover ring-2 ring-slate-200 dark:ring-slate-800"
+                onError={(e) => handleAvatarError(e, activeTarget.details?.displayName)}
               />
               {isTargetOnline && (
                 <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />

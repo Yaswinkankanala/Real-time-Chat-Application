@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Search, X, MessageSquare, Phone, Key, UserCheck, Check, AlertCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { useSocket } from '../../context/SocketContext';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function FindPeopleModal({ isOpen, onClose }) {
   const { selectTarget, onlineUserIds } = useSocket();
@@ -141,12 +142,10 @@ export default function FindPeopleModal({ isOpen, onClose }) {
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="relative shrink-0">
                       <img
-                        src={
-                          u.avatar ||
-                          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.displayName || 'User')}`
-                        }
+                        src={resolveAvatarUrl(u.avatar, u.displayName)}
                         alt={u.displayName}
                         className="w-10 h-10 rounded-full object-cover ring-2 ring-indigo-500/30"
+                        onError={(e) => handleAvatarError(e, u.displayName)}
                       />
                       {isOnline && (
                         <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />

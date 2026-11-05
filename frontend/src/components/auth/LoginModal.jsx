@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { api } from '../../services/api';
 import ChatSphereLogo from '../common/ChatSphereLogo';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 import {
   Lock,
   Mail,
@@ -13,7 +15,9 @@ import {
   CheckCircle2,
   Eye,
   EyeOff,
-  ArrowRight
+  ArrowRight,
+  Camera,
+  Upload
 } from 'lucide-react';
 
 export default function LoginModal() {
@@ -32,9 +36,14 @@ export default function LoginModal() {
     mobileNumber: '',
     gender: '',
     dob: '',
+    avatar: '',
     password: '',
     confirmPassword: ''
   });
+
+  const [previewAvatar, setPreviewAvatar] = useState('');
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const fileInputRef = useRef(null);
 
   const [loading, setLoading] = useState(false);
   const [localError, setLocalError] = useState('');
@@ -47,14 +56,68 @@ export default function LoginModal() {
     setLocalError('');
   };
 
+  const handlePhotoSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const validMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    const validExts = ['.jpg', '.jpeg', '.png', '.webp'];
+
+    if (!validMimes.includes(file.type.toLowerCase()) && !validExts.includes(ext)) {
+      setLocalError('Unsupported file format. Please upload JPG, JPEG, PNG, or WEBP image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setLocalError('File size exceeds limit of 5MB. Please upload a smaller image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    // Show immediate preview
+    const reader = new FileReader();
+    reader.onload = () => {
+      setPreviewAvatar(reader.result);
+    };
+    reader.readAsDataURL(file);
+
+    setUploadingAvatar(true);
+    setLocalError('');
+    try {
+      const res = await api.uploadFile(file);
+      if (!res?.url) {
+        throw new Error('Upload response did not return a valid file URL');
+      }
+      setFormData((prev) => ({ ...prev, avatar: res.url }));
+    } catch (err) {
+      setLocalError('Failed to upload image: ' + err.message);
+      setFormData((prev) => ({ ...prev, avatar: '' }));
+      setPreviewAvatar('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    } finally {
+      setUploadingAvatar(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLocalError('');
+
+    if (uploadingAvatar) {
+      setLocalError('Please wait for your profile photo to finish uploading.');
+      return;
+    }
+
     setLoading(true);
 
     try {
       if (isSignUp) {
         // Sign Up Validations
+        if (!formData.avatar) {
+          throw new Error('Profile photo is required. Please upload a photo to continue.');
+        }
         if (!formData.displayName.trim()) {
           throw new Error('Full Name is required');
         }
@@ -87,6 +150,7 @@ export default function LoginModal() {
           mobileNumber: formData.mobileNumber.trim(),
           gender: formData.gender,
           dob: formData.dob,
+          avatar: formData.avatar,
           password: formData.password
         });
       } else {
@@ -274,6 +338,59 @@ export default function LoginModal() {
           ) : (
             /* ----------------- SIGN UP FIELDS ----------------- */
             <>
+              {/* Profile Photo Upload Field */}
+              <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 flex items-center gap-3.5">
+                <div className="relative shrink-0">
+                  {previewAvatar ? (
+                    <img
+                      src={previewAvatar}
+                      alt="Preview"
+                      className="w-13 h-13 rounded-full object-cover ring-2 ring-indigo-500/50"
+                      onError={(e) => handleAvatarError(e, formData.displayName || 'User')}
+                    />
+                  ) : (
+                    <div className="w-13 h-13 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center ring-2 ring-dashed ring-slate-300 dark:ring-slate-700">
+                      <Camera className="w-5 h-5 text-slate-400" />
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="absolute -bottom-1 -right-1 p-1 rounded-full bg-indigo-600 text-white shadow hover:bg-indigo-500 transition"
+                  >
+                    <Camera className="w-2.5 h-2.5" />
+                  </button>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <label className="text-xs font-bold text-slate-800 dark:text-slate-200 block mb-1">
+                    Profile Photo <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
+                    onChange={handlePhotoSelect}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingAvatar}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-850 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                  >
+                    {uploadingAvatar ? (
+                      <span className="w-3 h-3 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Upload className="w-3 h-3 text-indigo-500" />
+                    )}
+                    <span>{uploadingAvatar ? 'Uploading...' : previewAvatar ? 'Change Photo' : 'Select Photo'}</span>
+                  </button>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                    Compulsory. Allowed: JPG, PNG, WEBP (Max 5MB)
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">

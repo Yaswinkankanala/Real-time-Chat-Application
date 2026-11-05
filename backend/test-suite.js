@@ -4,7 +4,8 @@ const fs = require('fs');
 const path = require('path');
 const { db, saveDatabase, users, channels, conversations, messages, generateUniqueCode, sanitizeUser, DuplicateKeyError, normalizeEmail, normalizePhone } = require('./src/db');
 const { checkProfileCompleted, isValidPhoneNumber } = require('./src/routes/authRoutes');
-const { verifyPhotoStored, UPLOADS_DIR } = require('./src/photoValidation');
+const { verifyPhotoStored, UPLOADS_DIR, PROFILE_IMAGES_DIR } = require('./src/photoValidation');
+const imageStore = require('./src/storage/imageStore');
 const { generateSummary, localNlpSummarize } = require('./src/aiSummary');
 
 console.log('🧪 Starting ChatSphere Comprehensive Test Suite...\n');
@@ -466,6 +467,43 @@ assert.ok(updatePhoneDup, 'Updating phone to another user\'s phone must throw Du
 const updatedSelf = users.update(user2.id, { email: user2.email, mobileNumber: user2.mobileNumber });
 assert.ok(updatedSelf, 'Updating with own existing email/phone must succeed without error');
 console.log('✅ Test 24 Passed: Profile update enforces duplicate prevention while allowing retention of own info.\n');
+
+// Test 25: Persistent Profile Image Storage & Unique Filename Generation
+console.log('Test 25: Verifying Persistent Profile Image Storage...');
+const fakeImageBuffer = Buffer.from('fake-jpeg-binary-stream-12345');
+const savedImage = imageStore.saveProfileImage(fakeImageBuffer, 'myphoto.jpg', 'image/jpeg', 'usr_test_user');
+assert.ok(savedImage.url.startsWith('/uploads/profile-images/profile_usr_test_user_'), 'URL must be in dedicated profile-images folder');
+assert.ok(savedImage.url.endsWith('.jpg'), 'Image extension must match');
+assert.strictEqual(imageStore.hasImage(savedImage.url), true, 'Image must exist in persistent store');
+assert.strictEqual(verifyPhotoStored(savedImage.url), true, 'verifyPhotoStored must validate the persistent image');
+console.log(`✅ Test 25 Passed: Profile image stored persistently with URL: ${savedImage.url}\n`);
+
+// Test 26: Render Ephemeral Filesystem Recovery (Re-materializing from Registry)
+console.log('Test 26: Verifying Ephemeral Filesystem Recovery via imageStore.init()...');
+const storedDiskFile = path.join(PROFILE_IMAGES_DIR, savedImage.filename);
+assert.ok(fs.existsSync(storedDiskFile), 'Disk file must exist initially');
+// Simulate container restart by deleting disk file
+fs.unlinkSync(storedDiskFile);
+assert.ok(!fs.existsSync(storedDiskFile), 'Disk file simulated deleted');
+// Re-initialize image store (like server boot)
+imageStore.init();
+assert.ok(fs.existsSync(storedDiskFile), 'Disk file must be restored automatically from persistent registry');
+console.log('✅ Test 26 Passed: Ephemeral filesystem recovery re-materializes missing profile photos.\n');
+
+// Test 27: Strict Rejection of Temporary Local Paths
+console.log('Test 27: Verifying Rejection of Temporary Local Paths (blob:, file://, C:\\...)...');
+assert.strictEqual(verifyPhotoStored('blob:http://localhost:5173/abcd-1234'), false, 'blob: paths must be rejected');
+assert.strictEqual(verifyPhotoStored('file:///C:/Users/HP/Pictures/me.jpg'), false, 'file:// paths must be rejected');
+assert.strictEqual(verifyPhotoStored('C:\\Users\\HP\\Pictures\\me.jpg'), false, 'Windows local file paths must be rejected');
+assert.strictEqual(verifyPhotoStored('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA'), false, 'Raw data URLs must be rejected from profile field');
+console.log('✅ Test 27 Passed: Temporary local and unshared paths are strictly rejected.\n');
+
+// Test 28: Clean Up of Old Profile Photos
+console.log('Test 28: Verifying Clean Up of Replaced Profile Photos...');
+const oldUrl = savedImage.url;
+imageStore.deleteOldProfileImage(oldUrl, 'usr_test_user');
+assert.ok(!fs.existsSync(storedDiskFile), 'Old image disk file must be cleaned up');
+console.log('✅ Test 28 Passed: Old profile image safely cleaned up when replaced.\n');
 
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import ChatSphereLogo from '../common/ChatSphereLogo';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 import {
   User,
   Mail,
@@ -285,9 +286,10 @@ export default function OnboardingModal({ isOpen }) {
             <div className="relative shrink-0">
               {previewAvatar ? (
                 <img
-                  src={previewAvatar}
+                  src={resolveAvatarUrl(previewAvatar, formData.displayName)}
                   alt="Profile Preview"
                   className="w-14 h-14 rounded-full object-cover ring-2 ring-indigo-500/40"
+                  onError={(e) => handleAvatarError(e, formData.displayName)}
                 />
               ) : (
                 <div className="w-14 h-14 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center ring-2 ring-dashed ring-slate-300 dark:ring-slate-600">

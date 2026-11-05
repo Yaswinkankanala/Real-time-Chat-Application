@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 const DEFAULT_INTEREST_SUGGESTIONS = [
   'Tech & Coding', 'UI/UX Design', 'WebSockets', 'Open Source',
@@ -78,10 +79,20 @@ export default function ProfileModal({ isOpen, onClose }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Validate image format
-    const validFormats = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validFormats.includes(file.mimetype) && !file.type.startsWith('image/')) {
-      setError('Please select a valid image (JPG, JPEG, PNG, WEBP).');
+    // Validate image format and size
+    const validMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    const validExts = ['.jpg', '.jpeg', '.png', '.webp'];
+
+    if (!validMimes.includes(file.type.toLowerCase()) && !validExts.includes(ext)) {
+      setError('Unsupported file format. Please upload JPG, JPEG, PNG, or WEBP image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError('File size exceeds limit of 5MB. Please upload a smaller image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -257,9 +268,10 @@ export default function ProfileModal({ isOpen, onClose }) {
           <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 flex items-center gap-4">
             <div className="relative shrink-0">
               <img
-                src={previewAvatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(formData.displayName || 'User')}`}
+                src={resolveAvatarUrl(previewAvatar || formData.avatar || user?.avatar, formData.displayName || user?.displayName)}
                 alt="Profile Preview"
                 className="w-16 h-16 rounded-full object-cover ring-2 ring-indigo-500/40 shadow"
+                onError={(e) => handleAvatarError(e, formData.displayName || user?.displayName)}
               />
               <button
                 type="button"

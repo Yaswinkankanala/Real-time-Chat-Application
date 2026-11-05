@@ -4,22 +4,14 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { users, channels, conversations, messages, sanitizeUser } = require('../db');
-const { authMiddleware } = require('../auth');
+const { authMiddleware, verifyToken } = require('../auth');
 const { generateSummary } = require('../aiSummary');
 const { UPLOADS_DIR, verifyPhotoStored } = require('../photoValidation');
+const { saveProfileImage, deleteOldProfileImage } = require('../storage/imageStore');
 
 const router = express.Router();
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    const uniqueName = `upload-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
-    cb(null, uniqueName);
-  }
-});
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
@@ -59,7 +51,54 @@ function enrichMessage(msg) {
   };
 }
 
-// All chat routes require authentication
+// ==========================================
+// 1. FILE & PROFILE PHOTO UPLOAD API
+// (Accessible for both registration and authenticated users)
+// ==========================================
+router.post('/upload', (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File size exceeds limit of 5MB. Please upload a smaller image.' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    // Determine associated user ID if user is authenticated, else 'pending'
+    let userId = 'pending';
+    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
+      const token = req.headers.authorization.split(' ')[1];
+      const verified = verifyToken(token);
+      if (verified && verified.id) {
+        userId = verified.id;
+      }
+    }
+
+    try {
+      const saved = saveProfileImage(
+        req.file.buffer,
+        req.file.originalname,
+        req.file.mimetype,
+        userId
+      );
+
+      return res.json({
+        url: saved.url,
+        filename: saved.filename,
+        mimetype: saved.mimetype,
+        size: saved.size
+      });
+    } catch (saveErr) {
+      console.error('Failed to save profile image:', saveErr);
+      return res.status(500).json({ error: 'Failed to process and store image' });
+    }
+  });
+});
+
+// All following chat and profile routes require authentication
 router.use(authMiddleware);
 
 // Middleware: Strictly enforce completed profile before accessing dashboard, chats, and channels
@@ -76,31 +115,6 @@ function requireCompletedProfile(req, res, next) {
   }
   next();
 }
-
-// ==========================================
-// 1. FILE & PROFILE PHOTO UPLOAD API
-// ==========================================
-router.post('/upload', (req, res) => {
-  upload.single('file')(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ error: 'File size exceeds limit of 5MB. Please upload a smaller image.' });
-      }
-      return res.status(400).json({ error: err.message || 'File upload failed' });
-    }
-    if (!req.file) {
-      return res.status(400).json({ error: 'No file uploaded' });
-    }
-
-    const fileUrl = `/uploads/${req.file.filename}`;
-    return res.json({
-      url: fileUrl,
-      filename: req.file.originalname,
-      mimetype: req.file.mimetype,
-      size: req.file.size
-    });
-  });
-});
 
 // ==========================================
 // 2. USER PROFILE & SEARCH APIS
@@ -224,6 +238,10 @@ router.put('/users/profile', (req, res) => {
   if (avatar !== undefined) {
     if (avatar && !verifyPhotoStored(avatar)) {
       return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
+    }
+    // Clean up previous custom image if user replaced photo
+    if (currentUser.avatar && currentUser.avatar !== avatar.trim()) {
+      deleteOldProfileImage(currentUser.avatar, currentUserId);
     }
     updates.avatar = avatar.trim();
   }

@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { api } from '../../services/api';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function RightDetailsSidebar({ isOpen, onClose }) {
   const { user } = useAuth();
@@ -112,12 +113,10 @@ export default function RightDetailsSidebar({ isOpen, onClose }) {
               </div>
             ) : (
               <img
-                src={
-                  targetUser?.avatar ||
-                  `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(targetUser?.displayName || 'User')}`
-                }
+                src={resolveAvatarUrl(targetUser?.avatar, targetUser?.displayName)}
                 alt={targetUser?.displayName}
                 className="w-16 h-16 rounded-full object-cover ring-2 ring-indigo-500/30 mx-auto"
+                onError={(e) => handleAvatarError(e, targetUser?.displayName)}
               />
             )}
           </div>

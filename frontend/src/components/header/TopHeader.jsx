@@ -13,6 +13,7 @@ import {
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import ChatSphereLogo from '../common/ChatSphereLogo';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp }) {
   const { user, logout } = useAuth();
@@ -106,12 +107,10 @@ export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp })
         >
           <div className="relative">
             <img
-              src={
-                user?.avatar ||
-                `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user?.displayName || 'User')}`
-              }
+              src={resolveAvatarUrl(user?.avatar, user?.displayName)}
               alt={user?.displayName}
               className="w-9 h-9 rounded-full object-cover ring-2 ring-indigo-500/30 dark:ring-indigo-500/40 shadow-sm"
+              onError={(e) => handleAvatarError(e, user?.displayName)}
             />
             <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-900" />
           </div>

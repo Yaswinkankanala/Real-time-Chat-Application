@@ -17,6 +17,7 @@ import { api } from '../../services/api';
 import CreateChannelModal from './CreateChannelModal';
 import ExploreChannelsModal from './ExploreChannelsModal';
 import FindPeopleModal from '../chat/FindPeopleModal';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function Sidebar({ onOpenProfile }) {
   const { user } = useAuth();
@@ -271,12 +272,10 @@ export default function Sidebar({ onOpenProfile }) {
                   >
                     <div className="relative shrink-0">
                       <img
-                        src={
-                          u.avatar ||
-                          `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(u.displayName || 'User')}`
-                        }
+                        src={resolveAvatarUrl(u.avatar, u.displayName)}
                         alt={u.displayName}
                         className="w-7 h-7 rounded-full object-cover ring-1 ring-slate-300 dark:ring-slate-700"
+                        onError={(e) => handleAvatarError(e, u.displayName)}
                       />
                       {isOnline && (
                         <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-emerald-500 ring-1 ring-white dark:ring-slate-900" />

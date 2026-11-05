@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 const AVAILABLE_EMOJIS = ['👍', '❤️', '🔥', '🚀', '✨', '😂', '🎉', '👏'];
 
@@ -105,12 +106,10 @@ export default function MessageItem({ message }) {
       {/* Sender Avatar */}
       <div className="shrink-0 relative">
         <img
-          src={
-            message.sender?.avatar ||
-            `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(message.sender?.displayName || 'User')}`
-          }
+          src={resolveAvatarUrl(message.sender?.avatar, message.sender?.displayName || message.sender?.username)}
           alt={message.sender?.displayName || 'User'}
           className="w-9 h-9 rounded-full object-cover ring-1 ring-slate-200 dark:ring-slate-800"
+          onError={(e) => handleAvatarError(e, message.sender?.displayName || message.sender?.username)}
         />
       </div>
 
