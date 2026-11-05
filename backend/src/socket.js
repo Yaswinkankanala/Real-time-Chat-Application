@@ -1,15 +1,11 @@
 const { verifyToken } = require('./auth');
 const { users, messages, channels, conversations } = require('./db');
 const { enrichMessage } = require('./routes/chatRoutes');
-const { getAgentReply, AI_AGENT_PROFILE } = require('./aiAgent');
 
 // Map of userId -> Set of socket IDs
 const onlineUsers = new Map();
 
 function setupSocket(io) {
-  // Always mark AI agent as online
-  onlineUsers.set('usr_nova_ai', new Set(['socket_ai_agent_internal']));
-
   // Socket.io JWT authentication middleware
   io.use((socket, next) => {
     const token = socket.handshake.auth?.token || socket.handshake.query?.token;
@@ -45,6 +41,19 @@ function setupSocket(io) {
 
     // Broadcast updated online users list
     io.emit('presence:list', Array.from(onlineUsers.keys()));
+
+    // When user reconnects, check for unread messages sent to them and update status to 'delivered'
+    const pendingDirectMsgs = messages.find(
+      (m) => m.recipientId === userId && m.status === 'sent'
+    );
+    if (pendingDirectMsgs.length > 0) {
+      pendingDirectMsgs.forEach((m) => {
+        messages.update(m.id, { status: 'delivered' });
+        const updated = enrichMessage(m);
+        io.to(`user:${m.senderId}`).emit('message:updated', updated);
+        socket.emit('message:new', updated);
+      });
+    }
 
     // Join channel room (validates membership for private channels!)
     socket.on('channel:join', (channelId, callback) => {
@@ -86,15 +95,21 @@ function setupSocket(io) {
             return;
           }
           if (channel.isPrivate && !channels.isMember(channelId, userId)) {
-            if (callback) callback({ error: 'Access denied to private channel' });
+            if (callback) callback({ error: 'Access denied: Passcode required to view or message in this channel' });
             return;
           }
         }
 
         let conversationId = null;
+        let isRecipientOffline = false;
+
         if (recipientId) {
           const conv = conversations.findOrCreate(userId, recipientId);
           conversationId = conv.id;
+
+          // Check if recipient is online
+          const recipientSockets = onlineUsers.get(recipientId);
+          isRecipientOffline = !recipientSockets || recipientSockets.size === 0;
         }
 
         const cleanContent = content ? content.trim() : '';
@@ -107,7 +122,7 @@ function setupSocket(io) {
           senderId: userId,
           content: cleanContent,
           attachment: attachment || null,
-          status: 'sent',
+          status: isRecipientOffline ? 'sent' : 'delivered',
           readBy: [userId],
           reactions: {},
           createdAt: new Date().toISOString()
@@ -123,155 +138,63 @@ function setupSocket(io) {
         if (channelId) {
           io.to(`channel:${channelId}`).emit('message:new', enriched);
         } else if (recipientId) {
-          io.to(`user:${recipientId}`).emit('message:new', enriched);
+          // Emit to sender socket
           io.to(`user:${userId}`).emit('message:new', enriched);
+
+          // If recipient is online, emit to recipient
+          if (!isRecipientOffline) {
+            io.to(`user:${recipientId}`).emit('message:new', enriched);
+          }
         }
 
-        if (callback) callback({ status: 'ok', message: enriched });
-
-        // Trigger Nova AI if conditions are met
-        const isAiLounge = channelId === 'chan_ai_lounge';
-        const mentionsAi = /(?:@nova|@ai|@bot|\/ai)/i.test(cleanContent);
-        const isDmToAi = recipientId === 'usr_nova_ai';
-
-        if ((channelId && (isAiLounge || mentionsAi)) || isDmToAi) {
-          const typingEvent = {
-            userId: 'usr_nova_ai',
-            username: AI_AGENT_PROFILE.username,
-            displayName: AI_AGENT_PROFILE.displayName,
-            channelId: channelId || null,
-            recipientId: isDmToAi ? userId : null,
-            isTyping: true
-          };
-
-          if (channelId) {
-            io.to(`channel:${channelId}`).emit('typing:status', typingEvent);
-          } else {
-            io.to(`user:${userId}`).emit('typing:status', typingEvent);
-          }
-
-          setTimeout(async () => {
-            try {
-              let context = '';
-              if (channelId) {
-                const recents = messages
-                  .find((m) => m.channelId === channelId)
-                  .slice(-5)
-                  .map((m) => `${m.senderId}: ${m.content}`)
-                  .join('\n');
-                context = recents;
-              }
-
-              const promptToAi = cleanContent
-                .replace(/@nova\b/gi, '')
-                .replace(/@ai\b/gi, '')
-                .replace(/@bot\b/gi, '')
-                .replace(/^\/ai\s*/i, '')
-                .trim() || 'Hello Nova!';
-
-              const aiReplyText = await getAgentReply(promptToAi, context);
-
-              const aiMsg = {
-                id: `msg_ai_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                channelId: channelId || null,
-                conversationId: isDmToAi ? conversationId : null,
-                recipientId: isDmToAi ? userId : null,
-                senderId: 'usr_nova_ai',
-                content: aiReplyText,
-                attachment: null,
-                status: 'read',
-                readBy: ['usr_nova_ai', userId],
-                reactions: {},
-                createdAt: new Date().toISOString()
-              };
-
-              messages.create(aiMsg);
-              if (conversationId) {
-                conversations.update(conversationId, { lastMessage: aiMsg });
-              }
-
-              const enrichedAiMsg = enrichMessage(aiMsg);
-
-              if (channelId) {
-                io.to(`channel:${channelId}`).emit('typing:status', { ...typingEvent, isTyping: false });
-                io.to(`channel:${channelId}`).emit('message:new', enrichedAiMsg);
-              } else {
-                io.to(`user:${userId}`).emit('typing:status', { ...typingEvent, isTyping: false });
-                io.to(`user:${userId}`).emit('message:new', enrichedAiMsg);
-              }
-            } catch (err) {
-              console.error('Error in Nova AI socket reply:', err);
-            }
-          }, 600);
+        if (callback) {
+          callback({
+            status: 'ok',
+            message: enriched,
+            isRecipientOffline
+          });
         }
       } catch (err) {
-        console.error('Error in socket message:send:', err);
-        if (callback) callback({ error: 'Failed to send message' });
+        console.error('Socket message:send error:', err);
+        if (callback) callback({ error: 'Failed to send message: ' + err.message });
       }
     });
 
-    // Mark message as read
-    socket.on('message:mark_read', ({ messageId }) => {
+    // Message reaction
+    socket.on('message:react', (data) => {
+      const { messageId, emoji } = data;
       const msg = messages.findById(messageId);
-      if (msg) {
-        const readBy = msg.readBy || [];
-        if (!readBy.includes(userId)) {
-          readBy.push(userId);
-          const updated = messages.update(messageId, { status: 'read', readBy });
-          const enriched = enrichMessage(updated);
+      if (!msg) return;
 
-          if (msg.channelId) {
-            io.to(`channel:${msg.channelId}`).emit('message:updated', enriched);
-          } else {
-            io.to(`user:${msg.senderId}`).emit('message:updated', enriched);
-            io.to(`user:${userId}`).emit('message:updated', enriched);
-          }
+      if (!msg.reactions) msg.reactions = {};
+      if (!msg.reactions[emoji]) msg.reactions[emoji] = [];
+
+      const userIdx = msg.reactions[emoji].indexOf(userId);
+      if (userIdx !== -1) {
+        msg.reactions[emoji].splice(userIdx, 1);
+        if (msg.reactions[emoji].length === 0) {
+          delete msg.reactions[emoji];
         }
+      } else {
+        msg.reactions[emoji].push(userId);
+      }
+
+      messages.update(messageId, { reactions: msg.reactions });
+      const enriched = enrichMessage(msg);
+
+      if (msg.channelId) {
+        io.to(`channel:${msg.channelId}`).emit('message:updated', enriched);
+      } else if (msg.recipientId) {
+        io.to(`user:${msg.recipientId}`).emit('message:updated', enriched);
+        io.to(`user:${msg.senderId}`).emit('message:updated', enriched);
       }
     });
 
-    // Message reaction toggle
-    socket.on('message:react', ({ messageId, emoji }, callback) => {
-      try {
-        const msg = messages.findById(messageId);
-        if (!msg) {
-          if (callback) callback({ error: 'Message not found' });
-          return;
-        }
-
-        const currentReactions = msg.reactions || {};
-        const usersForEmoji = currentReactions[emoji] || [];
-
-        if (usersForEmoji.includes(userId)) {
-          currentReactions[emoji] = usersForEmoji.filter((id) => id !== userId);
-          if (currentReactions[emoji].length === 0) {
-            delete currentReactions[emoji];
-          }
-        } else {
-          currentReactions[emoji] = [...usersForEmoji, userId];
-        }
-
-        const updated = messages.update(messageId, { reactions: currentReactions });
-        const enriched = enrichMessage(updated);
-
-        if (updated.channelId) {
-          io.to(`channel:${updated.channelId}`).emit('message:updated', enriched);
-        } else if (updated.recipientId) {
-          io.to(`user:${updated.recipientId}`).emit('message:updated', enriched);
-          io.to(`user:${updated.senderId}`).emit('message:updated', enriched);
-        }
-
-        if (callback) callback({ status: 'ok', message: enriched });
-      } catch (err) {
-        console.error('Error handling message:react:', err);
-        if (callback) callback({ error: 'Failed to react' });
-      }
-    });
-
-    // Typing indicators
-    socket.on('typing:start', ({ channelId, recipientId }) => {
-      const payload = {
-        userId: socket.user.id,
+    // Typing start
+    socket.on('typing:start', (data) => {
+      const { channelId, recipientId } = data;
+      const eventData = {
+        userId,
         username: socket.user.username,
         displayName: socket.user.displayName,
         channelId,
@@ -280,42 +203,43 @@ function setupSocket(io) {
       };
 
       if (channelId) {
-        socket.to(`channel:${channelId}`).emit('typing:status', payload);
+        socket.to(`channel:${channelId}`).emit('typing:status', eventData);
       } else if (recipientId) {
-        socket.to(`user:${recipientId}`).emit('typing:status', payload);
+        socket.to(`user:${recipientId}`).emit('typing:status', eventData);
       }
     });
 
-    socket.on('typing:stop', ({ channelId, recipientId }) => {
-      const payload = {
-        userId: socket.user.id,
+    // Typing stop
+    socket.on('typing:stop', (data) => {
+      const { channelId, recipientId } = data;
+      const eventData = {
+        userId,
+        username: socket.user.username,
+        displayName: socket.user.displayName,
         channelId,
         recipientId,
         isTyping: false
       };
 
       if (channelId) {
-        socket.to(`channel:${channelId}`).emit('typing:status', payload);
+        socket.to(`channel:${channelId}`).emit('typing:status', eventData);
       } else if (recipientId) {
-        socket.to(`user:${recipientId}`).emit('typing:status', payload);
+        socket.to(`user:${recipientId}`).emit('typing:status', eventData);
       }
     });
 
-    // Handle disconnection
+    // Disconnect
     socket.on('disconnect', () => {
       if (onlineUsers.has(userId)) {
-        const userSockets = onlineUsers.get(userId);
-        userSockets.delete(socket.id);
-        if (userSockets.size === 0) {
+        onlineUsers.get(userId).delete(socket.id);
+        if (onlineUsers.get(userId).size === 0) {
           onlineUsers.delete(userId);
-          io.emit('presence:list', Array.from(onlineUsers.keys()));
         }
       }
+
+      io.emit('presence:list', Array.from(onlineUsers.keys()));
     });
   });
 }
 
-module.exports = {
-  setupSocket,
-  onlineUsers
-};
+module.exports = { setupSocket };

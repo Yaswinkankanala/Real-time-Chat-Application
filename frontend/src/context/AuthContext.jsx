@@ -1,15 +1,14 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
 import { api } from '../services/api';
 import {
+  auth,
   signInWithGoogle,
   signInWithFirebaseEmail,
   signUpWithFirebaseEmail,
   sendFirebasePasswordReset,
-  isFirebaseConfigured,
-  auth,
-  onAuthStateChanged,
-  signOut
+  isFirebaseConfigured
 } from '../firebase/config';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 
 const AuthContext = createContext(null);
 
@@ -19,6 +18,43 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+
+  // Global Theme state ('dark' | 'light')
+  const [theme, setTheme] = useState(() => {
+    return localStorage.getItem('chatsphere_theme') || 'dark';
+  });
+
+  // Apply theme to HTML root
+  useEffect(() => {
+    if (theme === 'dark') {
+      document.documentElement.classList.add('dark');
+      document.documentElement.classList.remove('light');
+    } else {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    }
+    localStorage.setItem('chatsphere_theme', theme);
+  }, [theme]);
+
+  // Set user theme when user profile is loaded
+  useEffect(() => {
+    if (user?.theme && user.theme !== theme) {
+      setTheme(user.theme);
+    }
+  }, [user?.theme]);
+
+  const toggleTheme = async (mode) => {
+    const nextTheme = mode || (theme === 'dark' ? 'light' : 'dark');
+    setTheme(nextTheme);
+    if (user) {
+      try {
+        await api.updateProfile({ theme: nextTheme });
+        setUser((prev) => (prev ? { ...prev, theme: nextTheme } : prev));
+      } catch (e) {
+        // Silent update failure fallback
+      }
+    }
+  };
 
   // Validate existing token on mount
   useEffect(() => {
@@ -73,8 +109,7 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Login with Email & Password
-   * Prioritizes authentic Firebase Auth when configured, with seamless backend session verification.
+   * Login with Email/Username & Password
    */
   const loginWithEmail = async (login, password) => {
     setAuthError(null);
@@ -90,13 +125,11 @@ export const AuthProvider = ({ children }) => {
             return res;
           }
         } catch (fbErr) {
-          // If Firebase failed, fallback to backend if user might be a local demo account
-          console.warn('Firebase login attempt failed, checking fallback:', fbErr.message);
-          throw fbErr;
+          // If Firebase is configured but login fails, try backend direct
         }
       }
 
-      // Backend direct login (for demo profiles or non-Firebase mode)
+      // Backend direct login
       const res = await api.login(login, password);
       handleAuthSuccess(res);
       return res;
@@ -107,25 +140,37 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Register with Email & Password
-   * Creates real Firebase Auth user account when configured, and initializes backend profile.
+   * Register with complete account information
    */
   const registerWithEmail = async (data) => {
     setAuthError(null);
     try {
-      if (isFirebaseConfigured()) {
-        const fbRes = await signUpWithFirebaseEmail(data.email, data.password, data.displayName || data.username);
-        if (fbRes && fbRes.idToken) {
-          const res = await api.verifyFirebaseToken(fbRes.idToken, {
-            username: data.username,
-            displayName: data.displayName
-          });
-          handleAuthSuccess(res);
-          return res;
+      if (isFirebaseConfigured() && data.email && data.password) {
+        try {
+          const fbRes = await signUpWithFirebaseEmail(
+            data.email,
+            data.password,
+            data.displayName || data.username
+          );
+          if (fbRes && fbRes.idToken) {
+            const res = await api.verifyFirebaseToken(fbRes.idToken, {
+              username: data.username,
+              displayName: data.displayName,
+              mobileNumber: data.mobileNumber,
+              gender: data.gender,
+              dob: data.dob,
+              avatar: data.avatar,
+              interests: data.interests
+            });
+            handleAuthSuccess(res);
+            return res;
+          }
+        } catch (fbErr) {
+          // Fallback to backend direct registration
         }
       }
 
-      // Backend direct registration fallback
+      // Backend direct registration
       const res = await api.register(data);
       handleAuthSuccess(res);
       return res;
@@ -136,13 +181,12 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Google OAuth Login using Firebase
+   * Google OAuth Login using Firebase (if available)
    */
   const loginWithGoogleAuth = async () => {
     setAuthError(null);
     try {
       const { idToken, user: gUser } = await signInWithGoogle();
-      // Cryptographically verify token with backend
       const res = await api.verifyFirebaseToken(idToken);
       handleAuthSuccess(res);
       return res;
@@ -166,19 +210,9 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Fast-track demo login
-  const loginDemo = async (demoUsername) => {
-    setAuthError(null);
-    try {
-      const res = await api.login(demoUsername, 'password123');
-      handleAuthSuccess(res);
-      return res;
-    } catch (err) {
-      setAuthError(err.message);
-      throw err;
-    }
-  };
-
+  /**
+   * Update Profile Details
+   */
   const updateUserProfile = async (updates) => {
     const res = await api.updateProfile(updates);
     if (res && res.user) {
@@ -191,6 +225,18 @@ export const AuthProvider = ({ children }) => {
     return null;
   };
 
+  /**
+   * Delete Account (Permanent, enforced by backend 10-day policy)
+   */
+  const deleteAccount = async () => {
+    const res = await api.deleteAccount();
+    await logout();
+    return res;
+  };
+
+  /**
+   * Logout
+   */
   const logout = async () => {
     try {
       if (auth) {
@@ -216,14 +262,16 @@ export const AuthProvider = ({ children }) => {
         authError,
         showOnboarding,
         setShowOnboarding,
-        isFirebaseConfigured: isFirebaseConfigured(),
+        theme,
+        toggleTheme,
         loginWithEmail,
         registerWithEmail,
         loginWithGoogleAuth,
         resetPassword,
-        loginDemo,
+        updateUserProfile,
+        deleteAccount,
         logout,
-        updateUserProfile
+        isFirebaseConfigured: isFirebaseConfigured()
       }}
     >
       {children}

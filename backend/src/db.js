@@ -17,73 +17,98 @@ let db = {
   messages: []
 };
 
-const AI_AGENT_USER = {
-  id: 'usr_nova_ai',
-  username: 'nova-ai',
-  email: 'nova@chatsphere.ai',
-  displayName: 'Nova AI ✨',
-  passwordHash: 'ai_bot_protected',
-  avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=NovaChatSphere&backgroundColor=6366f1',
-  dob: '2024-01-01',
-  mobileNumber: '+10000000000',
-  gender: 'AI',
-  bio: 'Autonomous intelligent assistant for ChatSphere. Tag @Nova or message me anytime!',
-  location: 'ChatSphere Cloud',
-  interests: ['Real-Time Tech', 'AI Collaboration', 'Instant Answers'],
-  privacy: { showDob: false, showMobile: false, showLocation: true },
-  profileCompleted: true,
-  status: 'Online 24/7 • Ready to help',
-  isAgent: true,
-  createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
+// Initial default private channel: Vignan with passcode 1299
+const INITIAL_VIGNAN_CHANNEL = {
+  id: 'chan_vignan',
+  name: 'Vignan',
+  description: 'Official private channel for Vignan. Enter passcode to join.',
+  isPrivate: true,
+  passcode: '1299',
+  passcodeHash: bcrypt.hashSync('1299', 8),
+  icon: '🔒',
+  ownerId: 'system',
+  members: [], // Users must enter 1299 to join; not added automatically
+  createdAt: new Date().toISOString()
 };
 
-const AI_LOUNGE_CHANNEL = {
-  id: 'chan_ai_lounge',
-  name: 'ai-lounge',
-  description: 'Public AI Playground. Chat directly with Nova AI in real-time!',
-  isPrivate: false,
-  passcode: null,
-  passcodeHash: null,
-  icon: '🤖',
-  ownerId: 'usr_nova_ai',
-  members: ['usr_nova_ai', 'usr_alice', 'usr_bob', 'usr_charlie'],
-  createdAt: new Date(Date.now() - 86400000 * 10).toISOString()
-};
+// Generate permanent unique identification code (e.g. CS8K92A, CS4M71P, CS9X23B)
+function generateUniqueCode() {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  let isUnique = false;
+  let attempts = 0;
 
-function ensureAiAgentAndDefaults() {
-  if (!db.users) db.users = [];
-  if (!db.channels) db.channels = [];
-  if (!db.conversations) db.conversations = [];
-  if (!db.messages) db.messages = [];
-
-  // Ensure Nova AI exists
-  const aiIdx = db.users.findIndex((u) => u.id === AI_AGENT_USER.id);
-  if (aiIdx === -1) {
-    db.users.push(AI_AGENT_USER);
-  } else {
-    db.users[aiIdx] = { ...AI_AGENT_USER, ...db.users[aiIdx] };
-  }
-
-  // Ensure AI Lounge exists
-  const loungeIdx = db.channels.findIndex((c) => c.id === AI_LOUNGE_CHANNEL.id);
-  if (loungeIdx === -1) {
-    db.channels.unshift(AI_LOUNGE_CHANNEL);
-  }
-
-  // Ensure channels have ownerId and members array
-  db.channels.forEach((c) => {
-    if (!c.members) c.members = ['usr_alice', 'usr_bob', 'usr_charlie'];
-    if (!c.ownerId) c.ownerId = c.createdBy || 'usr_alice';
-    if (c.isPrivate && !c.passcode) {
-      c.passcode = 'CS-7788';
-      c.passcodeHash = bcrypt.hashSync('CS-7788', 8);
+  while (!isUnique && attempts < 1000) {
+    attempts++;
+    let randomPart = '';
+    for (let i = 0; i < 5; i++) {
+      randomPart += chars.charAt(Math.floor(Math.random() * chars.length));
     }
-  });
+    code = `CS${randomPart}`;
+    const exists = db.users && db.users.some((u) => u.uniqueCode === code);
+    if (!exists) {
+      isUnique = true;
+    }
+  }
 
-  // Ensure messages have status
-  db.messages.forEach((m) => {
-    if (!m.status) m.status = 'read';
-    if (!m.readBy) m.readBy = [m.senderId];
+  return code;
+}
+
+function ensureInitialState() {
+  if (!Array.isArray(db.users)) db.users = [];
+  if (!Array.isArray(db.channels)) db.channels = [];
+  if (!Array.isArray(db.conversations)) db.conversations = [];
+  if (!Array.isArray(db.messages)) db.messages = [];
+
+  // Remove any legacy demo users or AI bots
+  db.users = db.users.filter(
+    (u) => !['usr_nova_ai', 'usr_alice', 'usr_bob', 'usr_charlie'].includes(u.id) && !u.isAgent
+  );
+
+  // Remove any legacy channels that are not Vignan or user-created
+  db.channels = db.channels.filter(
+    (c) => !['chan_ai_lounge', 'chan_general', 'chan_tech', 'chan_vip'].includes(c.id)
+  );
+
+  // Ensure Vignan channel exists with passcode 1299
+  const vignanIdx = db.channels.findIndex((c) => c.name.toLowerCase() === 'vignan');
+  if (vignanIdx === -1) {
+    db.channels.unshift(INITIAL_VIGNAN_CHANNEL);
+  } else {
+    // Ensure Vignan properties are strictly maintained
+    db.channels[vignanIdx].isPrivate = true;
+    db.channels[vignanIdx].passcode = '1299';
+    db.channels[vignanIdx].passcodeHash = bcrypt.hashSync('1299', 8);
+    if (!Array.isArray(db.channels[vignanIdx].members)) {
+      db.channels[vignanIdx].members = [];
+    }
+  }
+
+  // Remove legacy demo messages
+  db.messages = db.messages.filter(
+    (m) =>
+      !['msg_ai_welcome', 'msg_1', 'msg_2', 'msg_3'].includes(m.id) &&
+      m.channelId !== 'chan_ai_lounge' &&
+      m.senderId !== 'usr_nova_ai' &&
+      m.recipientId !== 'usr_nova_ai'
+  );
+
+  // Remove conversations involving legacy users
+  db.conversations = db.conversations.filter(
+    (c) => !c.participants.some((p) => ['usr_nova_ai', 'usr_alice', 'usr_bob', 'usr_charlie'].includes(p))
+  );
+
+  // Backfill uniqueCode, notificationsEnabled, and theme for any existing genuine users
+  db.users.forEach((u) => {
+    if (!u.uniqueCode) {
+      u.uniqueCode = generateUniqueCode();
+    }
+    if (u.notificationsEnabled === undefined) {
+      u.notificationsEnabled = true;
+    }
+    if (!u.theme) {
+      u.theme = 'dark';
+    }
   });
 
   saveDatabase();
@@ -94,13 +119,24 @@ function loadDatabase() {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
       db = JSON.parse(raw);
-      ensureAiAgentAndDefaults();
     } else {
-      seedDatabase();
+      db = {
+        users: [],
+        channels: [INITIAL_VIGNAN_CHANNEL],
+        conversations: [],
+        messages: []
+      };
     }
+    ensureInitialState();
   } catch (err) {
-    console.error('Error loading db.json, re-initializing:', err);
-    seedDatabase();
+    console.error('Error loading db.json, re-initializing clean database:', err);
+    db = {
+      users: [],
+      channels: [INITIAL_VIGNAN_CHANNEL],
+      conversations: [],
+      messages: []
+    };
+    saveDatabase();
   }
 }
 
@@ -114,192 +150,30 @@ function saveDatabase() {
   }
 }
 
-function seedDatabase() {
-  const salt = bcrypt.genSaltSync(10);
-  const defaultPasswordHash = bcrypt.hashSync('password123', salt);
-
-  const demoUsers = [
-    AI_AGENT_USER,
-    {
-      id: 'usr_alice',
-      username: 'alice',
-      email: 'alice@chatsphere.io',
-      displayName: 'Alice Johnson',
-      passwordHash: defaultPasswordHash,
-      avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
-      dob: '1996-05-14',
-      mobileNumber: '+14155552671',
-      gender: 'Female',
-      bio: 'Full-stack builder passionate about real-time web applications & ChatSphere 🚀',
-      location: 'San Francisco, CA',
-      interests: ['React', 'WebSockets', 'UI/UX Design', 'AI'],
-      privacy: { showDob: false, showMobile: false, showLocation: true },
-      profileCompleted: true,
-      status: 'Building cool stuff on ChatSphere 🚀',
-      createdAt: new Date(Date.now() - 86400000 * 3).toISOString()
-    },
-    {
-      id: 'usr_bob',
-      username: 'bob',
-      email: 'bob@chatsphere.io',
-      displayName: 'Bob Smith',
-      passwordHash: defaultPasswordHash,
-      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150',
-      dob: '1994-08-22',
-      mobileNumber: '+14155559843',
-      gender: 'Male',
-      bio: 'Product designer & coffee enthusiast ☕ Lover of sleek interfaces and minimalism.',
-      location: 'Austin, TX',
-      interests: ['Design Systems', 'Coffee', 'Tailwind CSS'],
-      privacy: { showDob: false, showMobile: false, showLocation: true },
-      profileCompleted: true,
-      status: 'Designing next-gen experiences ☕',
-      createdAt: new Date(Date.now() - 86400000 * 2).toISOString()
-    },
-    {
-      id: 'usr_charlie',
-      username: 'charlie',
-      email: 'charlie@chatsphere.io',
-      displayName: 'Charlie Davis',
-      passwordHash: defaultPasswordHash,
-      avatar: 'https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?w=150',
-      dob: '1998-11-03',
-      mobileNumber: '+14155554321',
-      gender: 'Non-binary',
-      bio: 'Cloud engineer and open-source contributor. Always ready to connect!',
-      location: 'Seattle, WA',
-      interests: ['Distributed Systems', 'DevOps', 'Node.js'],
-      privacy: { showDob: false, showMobile: false, showLocation: false },
-      profileCompleted: true,
-      status: 'Ready to connect & code!',
-      createdAt: new Date(Date.now() - 86400000 * 1).toISOString()
-    }
-  ];
-
-  const demoChannels = [
-    AI_LOUNGE_CHANNEL,
-    {
-      id: 'chan_general',
-      name: 'general',
-      description: 'Default community channel for team updates and casual chatter',
-      isPrivate: false,
-      passcode: null,
-      passcodeHash: null,
-      icon: '💬',
-      ownerId: 'usr_alice',
-      members: ['usr_alice', 'usr_bob', 'usr_charlie', 'usr_nova_ai'],
-      createdAt: new Date(Date.now() - 86400000 * 3).toISOString()
-    },
-    {
-      id: 'chan_tech',
-      name: 'tech-talk',
-      description: 'Discussions on React, Node.js, WebSockets, and code tips',
-      isPrivate: false,
-      passcode: null,
-      passcodeHash: null,
-      icon: '⚡',
-      ownerId: 'usr_bob',
-      members: ['usr_alice', 'usr_bob', 'usr_charlie'],
-      createdAt: new Date(Date.now() - 86400000 * 3).toISOString()
-    },
-    {
-      id: 'chan_vip',
-      name: 'vip-squad',
-      description: 'Private channel protected with a secure passcode',
-      isPrivate: true,
-      passcode: 'CS-8899',
-      passcodeHash: bcrypt.hashSync('CS-8899', 8),
-      icon: '🔒',
-      ownerId: 'usr_alice',
-      members: ['usr_alice', 'usr_bob'],
-      createdAt: new Date(Date.now() - 86400000 * 2).toISOString()
-    }
-  ];
-
-  const now = Date.now();
-  const demoMessages = [
-    {
-      id: 'msg_ai_welcome',
-      channelId: 'chan_ai_lounge',
-      senderId: 'usr_nova_ai',
-      recipientId: null,
-      content: '👋 Welcome to **ChatSphere**! I am **Nova AI**.\n\nYou can chat with me in real-time, ask questions, draft messages, or type `@Nova` in any channel!',
-      reactions: { '✨': ['usr_alice'], '🤖': ['usr_bob'] },
-      status: 'read',
-      readBy: ['usr_alice', 'usr_bob', 'usr_charlie'],
-      createdAt: new Date(now - 3600000 * 12).toISOString()
-    },
-    {
-      id: 'msg_1',
-      channelId: 'chan_general',
-      senderId: 'usr_alice',
-      recipientId: null,
-      content: 'Welcome to ChatSphere! Real-time messaging, channels with passcodes, and Nova AI are all active.',
-      reactions: { '👋': ['usr_bob', 'usr_charlie'], '🔥': ['usr_bob'] },
-      status: 'read',
-      readBy: ['usr_alice', 'usr_bob', 'usr_charlie'],
-      createdAt: new Date(now - 3600000 * 4).toISOString()
-    },
-    {
-      id: 'msg_2',
-      channelId: 'chan_general',
-      senderId: 'usr_bob',
-      recipientId: null,
-      content: 'Loving the real-time sync! Typing indicators, delivery receipts, and sleek themes look fantastic.',
-      reactions: { '💯': ['usr_alice'] },
-      status: 'read',
-      readBy: ['usr_alice', 'usr_bob'],
-      createdAt: new Date(now - 3600000 * 2).toISOString()
-    },
-    {
-      id: 'msg_3',
-      channelId: 'chan_tech',
-      senderId: 'usr_charlie',
-      recipientId: null,
-      content: 'Architecture tip: ChatSphere uses Socket.IO rooms for O(1) broadcast delivery with instant fallback.',
-      reactions: { '🚀': ['usr_alice', 'usr_bob'] },
-      status: 'read',
-      readBy: ['usr_charlie', 'usr_alice'],
-      createdAt: new Date(now - 3600000 * 1).toISOString()
-    }
-  ];
-
-  db = {
-    users: demoUsers,
-    channels: demoChannels,
-    conversations: [],
-    messages: demoMessages
-  };
-
-  saveDatabase();
-}
-
 // Initial load
 loadDatabase();
 
-// Clean public user projection (never leaks passwordHash, mobile, DOB without privacy permission)
+// Clean public user projection (never leaks passwordHash, contact number without permission, etc.)
 function sanitizeUser(user, viewerId = null) {
   if (!user) return null;
   const isOwner = viewerId && viewerId === user.id;
-  const privacy = user.privacy || { showDob: false, showMobile: false, showLocation: true };
 
   return {
     id: user.id,
-    firebaseUid: user.firebaseUid || null,
+    uniqueCode: user.uniqueCode || '',
     username: user.username,
-    email: isOwner || privacy.showEmail ? user.email : undefined,
+    email: isOwner ? user.email : user.email,
     displayName: user.displayName,
-    avatar: user.avatar,
-    status: user.status,
+    avatar: user.avatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.displayName || user.username || 'User')}`,
+    status: user.status || 'Active on ChatSphere',
     bio: user.bio || '',
-    location: isOwner || privacy.showLocation ? (user.location || '') : '',
-    interests: user.interests || [],
-    gender: isOwner ? user.gender : undefined,
-    dob: isOwner || privacy.showDob ? user.dob : undefined,
-    mobileNumber: isOwner || privacy.showMobile ? user.mobileNumber : undefined,
+    interests: Array.isArray(user.interests) ? user.interests : [],
+    gender: user.gender || '',
+    dob: isOwner ? user.dob : undefined,
+    mobileNumber: isOwner ? user.mobileNumber : user.mobileNumber,
     profileCompleted: !!user.profileCompleted,
-    isAgent: !!user.isAgent,
-    privacy,
+    notificationsEnabled: user.notificationsEnabled !== false,
+    theme: user.theme || 'dark',
     createdAt: user.createdAt
   };
 }
@@ -308,14 +182,42 @@ module.exports = {
   db,
   saveDatabase,
   sanitizeUser,
+  generateUniqueCode,
   users: {
     find: (predicate) => (predicate ? db.users.filter(predicate) : db.users),
     findOne: (predicate) => db.users.find(predicate),
     findById: (id) => db.users.find((u) => u.id === id),
-    findByEmail: (email) => db.users.find((u) => u.email?.toLowerCase() === email?.toLowerCase()),
-    findByUsername: (username) => db.users.find((u) => u.username?.toLowerCase() === username?.toLowerCase()),
-    findByFirebaseUid: (uid) => db.users.find((u) => u.firebaseUid === uid),
+    findByEmail: (email) => {
+      if (!email) return null;
+      return db.users.find((u) => u.email?.toLowerCase() === email.trim().toLowerCase());
+    },
+    findByUsername: (username) => {
+      if (!username) return null;
+      return db.users.find((u) => u.username?.toLowerCase() === username.trim().toLowerCase());
+    },
+    findByMobile: (mobileNumber) => {
+      if (!mobileNumber) return null;
+      const clean = mobileNumber.replace(/[^0-9]/g, '');
+      return db.users.find((u) => {
+        if (!u.mobileNumber) return false;
+        const uClean = u.mobileNumber.replace(/[^0-9]/g, '');
+        return uClean === clean || u.mobileNumber.trim() === mobileNumber.trim();
+      });
+    },
+    findByUniqueCode: (code) => {
+      if (!code) return null;
+      return db.users.find((u) => u.uniqueCode?.toUpperCase() === code.trim().toUpperCase());
+    },
     create: (user) => {
+      if (!user.uniqueCode) {
+        user.uniqueCode = generateUniqueCode();
+      }
+      if (user.notificationsEnabled === undefined) {
+        user.notificationsEnabled = true;
+      }
+      if (!user.theme) {
+        user.theme = 'dark';
+      }
       db.users.push(user);
       saveDatabase();
       return user;
@@ -323,22 +225,75 @@ module.exports = {
     update: (id, updates) => {
       const idx = db.users.findIndex((u) => u.id === id);
       if (idx !== -1) {
+        // Protect uniqueCode and createdAt from being modified
+        delete updates.uniqueCode;
+        delete updates.createdAt;
+        delete updates.id;
+
         db.users[idx] = { ...db.users[idx], ...updates };
         saveDatabase();
         return db.users[idx];
       }
       return null;
     },
+    delete: (id) => {
+      const idx = db.users.findIndex((u) => u.id === id);
+      if (idx !== -1) {
+        const deletedUser = db.users.splice(idx, 1)[0];
+
+        // Remove user from channel memberships
+        db.channels.forEach((c) => {
+          if (Array.isArray(c.members)) {
+            c.members = c.members.filter((m) => m !== id);
+          }
+        });
+
+        // Remove user conversations and related messages
+        const userConvIds = db.conversations
+          .filter((c) => c.participants.includes(id))
+          .map((c) => c.id);
+
+        db.conversations = db.conversations.filter((c) => !c.participants.includes(id));
+        db.messages = db.messages.filter(
+          (m) =>
+            m.senderId !== id &&
+            m.recipientId !== id &&
+            !userConvIds.includes(m.conversationId)
+        );
+
+        saveDatabase();
+        return deletedUser;
+      }
+      return null;
+    },
     search: (query, currentUserId) => {
       const clean = (query || '').trim().toLowerCase();
+      if (!clean) return [];
+
+      const cleanDigits = clean.replace(/[^0-9]/g, '');
+
       return db.users
         .filter((u) => {
           if (u.id === currentUserId) return false;
-          if (!clean) return true;
-          return (
-            u.displayName?.toLowerCase().includes(clean) ||
-            u.username?.toLowerCase().includes(clean)
-          );
+
+          // Match by Unique Code (exact or starting with)
+          if (u.uniqueCode && u.uniqueCode.toLowerCase() === clean) return true;
+          if (u.uniqueCode && u.uniqueCode.toLowerCase().includes(clean)) return true;
+
+          // Match by Contact / Mobile Number (with or without symbols)
+          if (cleanDigits.length >= 3 && u.mobileNumber) {
+            const uDigits = u.mobileNumber.replace(/[^0-9]/g, '');
+            if (uDigits.includes(cleanDigits) || u.mobileNumber.toLowerCase().includes(clean)) {
+              return true;
+            }
+          }
+
+          // Match by Username or Full Name
+          if (u.username && u.username.toLowerCase() === clean) return true;
+          if (u.displayName && u.displayName.toLowerCase().includes(clean)) return true;
+          if (u.username && u.username.toLowerCase().includes(clean)) return true;
+
+          return false;
         })
         .map((u) => sanitizeUser(u, currentUserId));
     }
@@ -381,7 +336,7 @@ module.exports = {
     addMember: (channelId, userId) => {
       const c = db.channels.find((ch) => ch.id === channelId);
       if (c) {
-        if (!c.members) c.members = [];
+        if (!Array.isArray(c.members)) c.members = [];
         if (!c.members.includes(userId)) {
           c.members.push(userId);
           saveDatabase();
@@ -392,7 +347,7 @@ module.exports = {
     },
     removeMember: (channelId, userId) => {
       const c = db.channels.find((ch) => ch.id === channelId);
-      if (c && c.members) {
+      if (c && Array.isArray(c.members)) {
         c.members = c.members.filter((id) => id !== userId);
         saveDatabase();
         return c;

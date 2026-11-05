@@ -3,43 +3,24 @@ import {
   Send,
   Paperclip,
   Smile,
-  Sparkles,
   X,
-  Image as ImageIcon,
-  Zap
+  Image as ImageIcon
 } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import { api } from '../../services/api';
 
-const QUICK_EMOJIS = ['😊', '😂', '🔥', '🚀', '👍', '❤️', '🎉', '💯', '🤖', '✨'];
+const QUICK_EMOJIS = ['😊', '😂', '🔥', '🚀', '👍', '❤️', '🎉', '💯', '👏', '✨'];
 
 export default function MessageInput() {
-  const { sendMessage, sendTypingStatus, activeTarget, messages } = useSocket();
+  const { sendMessage, sendTypingStatus, activeTarget } = useSocket();
   const [content, setContent] = useState('');
   const [attachment, setAttachment] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [showEmojis, setShowEmojis] = useState(false);
-  const [smartReplies, setSmartReplies] = useState([]);
 
   const fileInputRef = useRef(null);
   const typingTimeoutRef = useRef(null);
   const isTypingRef = useRef(false);
-
-  // Generate Smart Replies when latest message is received
-  useEffect(() => {
-    if (messages.length > 0) {
-      const lastMsg = messages[messages.length - 1];
-      if (lastMsg && !lastMsg.isOwn && lastMsg.content) {
-        api.getSmartReplies(lastMsg.content)
-          .then((res) => setSmartReplies(res.suggestions || []))
-          .catch(() => setSmartReplies([]));
-      } else {
-        setSmartReplies([]);
-      }
-    } else {
-      setSmartReplies([]);
-    }
-  }, [messages]);
 
   // Stop typing on channel switch
   useEffect(() => {
@@ -94,98 +75,82 @@ export default function MessageInput() {
     }
   };
 
-  const handleSend = async (overrideContent = null) => {
-    const textToSend = overrideContent !== null ? overrideContent : content;
-    if ((!textToSend.trim() && !attachment) || uploading) return;
+  const handleSend = async () => {
+    if ((!content.trim() && !attachment) || uploading) return;
 
-    const payload = {
-      content: textToSend.trim(),
-      attachment: attachment || null
-    };
+    const textToSend = content.trim();
+    const currentAttachment = attachment;
 
     setContent('');
     setAttachment(null);
     setShowEmojis(false);
-    setSmartReplies([]);
 
     if (isTypingRef.current) {
-      isTypingRef.current = false;
       sendTypingStatus(false);
+      isTypingRef.current = false;
     }
 
     try {
-      await sendMessage(payload);
+      await sendMessage({
+        content: textToSend,
+        attachment: currentAttachment
+      });
     } catch (err) {
       console.error('Failed to send message:', err);
+      alert('Could not deliver message: ' + err.message);
     }
   };
 
-  const insertTag = (tag) => {
-    setContent((prev) => (prev ? `${prev} ${tag} ` : `${tag} `));
+  const addEmoji = (emoji) => {
+    setContent((prev) => prev + emoji);
+    setShowEmojis(false);
   };
 
   return (
-    <div className="p-3 bg-slate-900/90 border-t border-slate-800 backdrop-blur-xl relative">
-      {/* Smart Reply suggestion chips */}
-      {smartReplies.length > 0 && (
-        <div className="flex items-center gap-1.5 mb-2 overflow-x-auto text-xs no-scrollbar animate-fade-in">
-          <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1 shrink-0 px-1">
-            <Zap className="w-3 h-3" /> Smart Replies:
-          </span>
-          {smartReplies.map((reply, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => handleSend(reply)}
-              className="shrink-0 px-2.5 py-1 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs transition active:scale-95"
-            >
-              {reply}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Quick Tag Pill */}
-      <div className="flex items-center gap-2 mb-2 px-1 text-xs">
-        <span className="text-slate-500 text-[11px]">Chat Assistant:</span>
-        <button
-          type="button"
-          onClick={() => insertTag('@Nova')}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/20 transition text-[11px]"
-        >
-          <Sparkles className="w-3 h-3 text-indigo-400" />
-          <span>Ask @Nova AI</span>
-        </button>
-      </div>
-
-      {/* Attachment Preview Chip */}
+    <div className="p-3 sm:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 transition-colors select-none shrink-0">
+      {/* Attachment Preview */}
       {attachment && (
-        <div className="mb-2 p-2 rounded-xl bg-slate-800/80 border border-slate-700 flex items-center justify-between max-w-xs animate-fade-in">
-          <div className="flex items-center gap-2 min-w-0">
-            <ImageIcon className="w-4 h-4 text-indigo-400 shrink-0" />
-            <span className="text-xs text-slate-200 truncate">{attachment.filename}</span>
+        <div className="mb-2 p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs animate-fade-in">
+          <div className="flex items-center gap-2 truncate">
+            {attachment.mimetype?.startsWith('image/') ? (
+              <img
+                src={attachment.url}
+                alt="Upload preview"
+                className="w-10 h-10 object-cover rounded-lg"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold text-[10px]">
+                FILE
+              </div>
+            )}
+            <div className="truncate">
+              <p className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                {attachment.filename}
+              </p>
+              <p className="text-[10px] text-slate-400">
+                {(attachment.size / 1024).toFixed(1)} KB
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={() => setAttachment(null)}
-            className="p-1 rounded text-slate-400 hover:text-white"
+            className="p-1 rounded-lg text-slate-400 hover:text-rose-500 transition"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
       )}
 
-      {/* Emoji Picker Tray */}
+      {/* Emoji Picker Popover */}
       {showEmojis && (
-        <div className="absolute bottom-full mb-2 left-4 p-2 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-wrap gap-1 max-w-xs z-30 animate-fade-in">
+        <div className="mb-2 p-2 rounded-2xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl flex flex-wrap gap-1.5 animate-fade-in max-w-xs">
           {QUICK_EMOJIS.map((emoji) => (
             <button
               key={emoji}
               type="button"
-              onClick={() => {
-                setContent((prev) => prev + emoji);
-              }}
-              className="w-8 h-8 flex items-center justify-center hover:bg-slate-800 rounded-lg text-lg transition hover:scale-110"
+              onClick={() => addEmoji(emoji)}
+              className="text-lg p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition"
             >
               {emoji}
             </button>
@@ -193,34 +158,34 @@ export default function MessageInput() {
         </div>
       )}
 
-      {/* Input container */}
-      <div className="flex items-end gap-2 bg-slate-950/80 rounded-2xl border border-slate-800/90 p-1.5 focus-within:border-indigo-500/80 transition-colors">
-        {/* Attachment Upload Button */}
+      {/* Input controls bar */}
+      <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-1.5 focus-within:border-indigo-500 transition-colors">
+        {/* Attachment button */}
         <input
           ref={fileInputRef}
           type="file"
-          className="hidden"
           onChange={handleFileUpload}
+          className="hidden"
         />
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={uploading}
-          className="p-2.5 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition disabled:opacity-50"
-          title="Upload image or file"
+          className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800 transition"
+          title="Attach photo or document"
         >
           {uploading ? (
-            <span className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin inline-block"></span>
+            <span className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
           ) : (
             <Paperclip className="w-4 h-4" />
           )}
         </button>
 
-        {/* Emoji Button */}
+        {/* Emoji trigger */}
         <button
           type="button"
           onClick={() => setShowEmojis(!showEmojis)}
-          className="p-2.5 rounded-xl text-slate-400 hover:text-slate-200 hover:bg-slate-900 transition"
+          className="p-2 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-white dark:hover:bg-slate-800 transition"
           title="Insert emoji"
         >
           <Smile className="w-4 h-4" />
@@ -234,19 +199,23 @@ export default function MessageInput() {
           onKeyDown={handleKeyDown}
           placeholder={
             activeTarget?.type === 'channel'
-              ? `Message #${activeTarget.details?.name || 'channel'}... (type @Nova to ask AI)`
-              : `Message ${activeTarget?.details?.displayName || 'user'}...`
+              ? `Message #${activeTarget.details?.name}...`
+              : `Message ${activeTarget?.details?.displayName}...`
           }
-          className="flex-1 bg-transparent py-2 px-1 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-32 min-h-[38px]"
+          className="flex-1 bg-transparent border-0 text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none resize-none py-1.5 px-2 max-h-28"
         />
 
         {/* Send Button */}
         <button
           type="button"
-          onClick={() => handleSend()}
+          onClick={handleSend}
           disabled={(!content.trim() && !attachment) || uploading}
-          className="p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/30 transition disabled:opacity-40 disabled:hover:bg-indigo-600"
-          title="Send message"
+          className={`p-2.5 rounded-xl transition ${
+            content.trim() || attachment
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30 hover:bg-indigo-500'
+              : 'text-slate-400 cursor-not-allowed opacity-50'
+          }`}
+          title="Send message (Enter)"
         >
           <Send className="w-4 h-4" />
         </button>

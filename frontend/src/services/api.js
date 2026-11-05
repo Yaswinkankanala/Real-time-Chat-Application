@@ -68,7 +68,7 @@ async function request(endpoint, options = {}) {
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('text/html')) {
     throw new Error(
-      `Backend API not reached at ${currentBase}. The server returned an HTML page. Please set VITE_API_URL in Render or enter your Backend URL in "Firebase Keys & Server Settings".`
+      `Backend API not reached at ${currentBase}. The server returned an HTML page. Please set VITE_API_URL in Render or enter your Backend URL in Settings.`
     );
   }
 
@@ -116,7 +116,7 @@ export const api = {
       method: 'POST'
     }),
 
-  // Users
+  // Users & Profile
   getUsers: () => request('/users'),
 
   searchUsers: (query) => request(`/users/search?q=${encodeURIComponent(query || '')}`),
@@ -129,6 +129,22 @@ export const api = {
       body: updates
     }),
 
+  deleteAccount: () =>
+    request('/users/account', {
+      method: 'DELETE'
+    }),
+
+  // File Upload (Images & Attachments)
+  uploadFile: async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    return request('/upload', {
+      method: 'POST',
+      body: formData,
+      isFormData: true
+    });
+  },
+
   // Conversations (1-to-1)
   getConversations: () => request('/conversations'),
 
@@ -138,87 +154,34 @@ export const api = {
       body: { targetUserId }
     }),
 
-  getConversationMessages: (convId) => request(`/conversations/${convId}/messages`),
+  getDirectMessages: (targetUserId) => request(`/conversations/${targetUserId}/messages`),
 
-  // Messages
-  sendMessage: (payload) =>
-    request('/messages', {
-      method: 'POST',
-      body: payload
-    }),
-
-  markMessageRead: (messageId) =>
-    request(`/messages/${messageId}/read`, {
-      method: 'PUT'
-    }),
-
-  reactToMessage: (messageId, emoji) =>
-    request(`/messages/${messageId}/reactions`, {
-      method: 'POST',
-      body: { emoji }
-    }),
-
-  // Channels with Passcodes
+  // Channels
   getChannels: () => request('/channels'),
 
-  createChannel: (data) =>
+  createChannel: (channelData) =>
     request('/channels', {
       method: 'POST',
-      body: data
+      body: channelData
     }),
 
-  joinChannel: (channelId, passcode = null) =>
-    request('/channels/join', {
+  joinChannel: (channelId, passcode) =>
+    request(`/channels/${channelId}/join`, {
       method: 'POST',
-      body: { channelId, passcode }
+      body: { passcode }
     }),
-
-  getChannelDetails: (channelId) => request(`/channels/${channelId}`),
-
-  getChannelMessages: (channelId) => request(`/channels/${channelId}/messages`),
 
   leaveChannel: (channelId) =>
     request(`/channels/${channelId}/leave`, {
       method: 'POST'
     }),
 
-  regeneratePasscode: (channelId) =>
-    request(`/channels/${channelId}/passcode`, {
-      method: 'PUT'
-    }),
+  getChannelMessages: (channelId) => request(`/channels/${channelId}/messages`),
+
+  getChannelDetails: (channelId) => request(`/channels/${channelId}`),
 
   deleteChannel: (channelId) =>
     request(`/channels/${channelId}`, {
       method: 'DELETE'
-    }),
-
-  // Uploads
-  uploadFile: async (file) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return request('/upload', {
-      method: 'POST',
-      isFormData: true,
-      body: formData
-    });
-  },
-
-  // Nova AI
-  askAi: (prompt, context = '') =>
-    request('/ai/chat', {
-      method: 'POST',
-      body: { prompt, context }
-    }),
-
-  getSmartReplies: (messageContent) =>
-    request('/ai/smart-reply', {
-      method: 'POST',
-      body: { messageContent }
-    }),
-
-  summarizeChat: ({ channelId, targetUserId }) =>
-    request('/ai/summarize', {
-      method: 'POST',
-      body: { channelId, targetUserId }
     })
 };

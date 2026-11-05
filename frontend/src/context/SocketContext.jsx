@@ -3,7 +3,6 @@ import { io } from 'socket.io-client';
 import { useAuth } from './AuthContext';
 import { api } from '../services/api';
 
-
 const SocketContext = createContext(null);
 
 const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
@@ -32,53 +31,18 @@ function normalizeSocketUrl() {
 
 const SOCKET_SERVER_URL = normalizeSocketUrl();
 
-// Web Audio API notification chime generator (pleasant subtle notification)
-function playNotificationChime() {
-  try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
-    
-    // First note
-    const osc1 = ctx.createOscillator();
-    const gain1 = ctx.createGain();
-    osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    gain1.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.25);
-    osc1.connect(gain1);
-    gain1.connect(ctx.destination);
-    osc1.start();
-    osc1.stop(ctx.currentTime + 0.25);
-
-    // Second note
-    const osc2 = ctx.createOscillator();
-    const gain2 = ctx.createGain();
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
-    gain2.gain.setValueAtTime(0.08, ctx.currentTime + 0.1);
-    gain2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
-    osc2.connect(gain2);
-    gain2.connect(ctx.destination);
-    osc2.start(ctx.currentTime + 0.1);
-    osc2.stop(ctx.currentTime + 0.35);
-  } catch (e) {
-    // Audio context may be restricted before user gesture
-  }
-}
-
 export const SocketProvider = ({ children }) => {
   const { token, user } = useAuth();
   const [socket, setSocket] = useState(null);
   const [isConnected, setIsConnected] = useState(false);
   const [onlineUserIds, setOnlineUserIds] = useState([]);
-  
+
   // Active conversation target: { type: 'channel' | 'direct', id: string, details: object }
   const [activeTarget, setActiveTarget] = useState(null);
   const [messages, setMessages] = useState([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  const [typingUsers, setTypingUsers] = useState({}); // userId -> { username, displayName }
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [typingUsers, setTypingUsers] = useState({}); // userId -> displayName
+  const [offlineNotice, setOfflineNotice] = useState(null); // Offline recipient notice
 
   const socketRef = useRef(null);
   const activeTargetRef = useRef(activeTarget);
@@ -104,17 +68,15 @@ export const SocketProvider = ({ children }) => {
     });
 
     s.on('connect', () => {
-      console.log('✅ Connected to WebSocket server with socket ID:', s.id);
       setIsConnected(true);
     });
 
-    s.on('disconnect', (reason) => {
-      console.warn('❌ Disconnected from WebSocket server:', reason);
+    s.on('disconnect', () => {
       setIsConnected(false);
     });
 
     s.on('presence:list', (list) => {
-      setOnlineUserIds(list);
+      setOnlineUserIds(Array.isArray(list) ? list : []);
     });
 
     // Handle incoming messages
@@ -133,11 +95,6 @@ export const SocketProvider = ({ children }) => {
           if (prev.some((m) => m.id === newMsg.id)) return prev;
           return [...prev, newMsg];
         });
-      }
-
-      // Play sound notification if message is from another user
-      if (newMsg.senderId !== user?.id && soundEnabled) {
-        playNotificationChime();
       }
     });
 
@@ -194,15 +151,16 @@ export const SocketProvider = ({ children }) => {
     activeTargetRef.current = newTarget;
     setTypingUsers({});
     setLoadingMessages(true);
+    setOfflineNotice(null);
 
     try {
       if (type === 'channel') {
         socketRef.current.emit('channel:join', id);
         const { messages: msgs } = await api.getChannelMessages(id);
-        setMessages(msgs);
+        setMessages(msgs || []);
       } else if (type === 'direct') {
         const { messages: msgs } = await api.getDirectMessages(id);
-        setMessages(msgs);
+        setMessages(msgs || []);
       }
     } catch (err) {
       console.error('Failed to load target messages:', err);
@@ -211,14 +169,15 @@ export const SocketProvider = ({ children }) => {
     }
   }, []);
 
-  // Send message
+  // Send message with offline notification detection
   const sendMessage = useCallback(
     async ({ content, attachment = null }) => {
       if (!socketRef.current || !activeTarget) return;
 
+      const isDirect = activeTarget.type === 'direct';
       const payload = {
         channelId: activeTarget.type === 'channel' ? activeTarget.id : null,
-        recipientId: activeTarget.type === 'direct' ? activeTarget.id : null,
+        recipientId: isDirect ? activeTarget.id : null,
         content,
         attachment
       };
@@ -228,6 +187,18 @@ export const SocketProvider = ({ children }) => {
           if (response?.error) {
             reject(new Error(response.error));
           } else {
+            // Check if receiver is offline
+            if (isDirect && response.isRecipientOffline) {
+              setOfflineNotice(
+                'Your friend is currently offline. Your message will be delivered when they come online.'
+              );
+              // Auto dismiss notice after 6 seconds
+              setTimeout(() => {
+                setOfflineNotice((current) =>
+                  current?.includes('offline') ? null : current
+                );
+              }, 6000);
+            }
             resolve(response.message);
           }
         });
@@ -265,8 +236,8 @@ export const SocketProvider = ({ children }) => {
         messages,
         loadingMessages,
         typingUsers,
-        soundEnabled,
-        setSoundEnabled,
+        offlineNotice,
+        setOfflineNotice,
         selectTarget,
         sendMessage,
         sendReaction,
@@ -285,4 +256,3 @@ export const useSocket = () => {
   }
   return context;
 };
-

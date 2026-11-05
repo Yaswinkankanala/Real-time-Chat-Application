@@ -5,11 +5,10 @@ const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { users, channels, conversations, messages, sanitizeUser } = require('../db');
 const { authMiddleware } = require('../auth');
-const { getAgentReply, generateSmartReplies, summarizeChat, AI_AGENT_PROFILE } = require('../aiAgent');
 
 const router = express.Router();
 
-// Setup Multer for attachment uploads
+// Setup Multer for media & profile picture uploads
 const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
@@ -21,14 +20,32 @@ const storage = multer.diskStorage({
   },
   filename: (req, file, cb) => {
     const ext = path.extname(file.originalname);
-    const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
+    const uniqueName = `upload-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
     cb(null, uniqueName);
   }
 });
 
+const fileFilter = (req, file, cb) => {
+  const allowedTypes = [
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/webp',
+    'image/gif',
+    'application/pdf',
+    'text/plain'
+  ];
+  if (allowedTypes.includes(file.mimetype.toLowerCase()) || file.mimetype.startsWith('image/')) {
+    cb(null, true);
+  } else {
+    cb(new Error('Supported formats: JPG, JPEG, PNG, WEBP, GIF, PDF, TXT'));
+  }
+};
+
 const upload = multer({
   storage,
-  limits: { fileSize: 15 * 1024 * 1024 } // 15MB
+  fileFilter,
+  limits: { fileSize: 20 * 1024 * 1024 } // 20MB
 });
 
 // Helper to enrich message with sender details
@@ -46,26 +63,36 @@ function enrichMessage(msg) {
         username: 'Unknown',
         displayName: 'Unknown User',
         avatar: '',
-        isAgent: false
+        uniqueCode: ''
       }
   };
-}
-
-// Helper to generate secure random channel passcode
-function generateChannelPasscode() {
-  const prefix = 'CS';
-  const randomNum = Math.floor(1000 + Math.random() * 9000);
-  return `${prefix}-${randomNum}`;
 }
 
 // All chat routes require authentication
 router.use(authMiddleware);
 
 // ==========================================
-// 1. USER PROFILE & SEARCH APIS
+// 1. FILE & PROFILE PHOTO UPLOAD API
+// ==========================================
+router.post('/upload', upload.single('file'), (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const fileUrl = `/uploads/${req.file.filename}`;
+  res.json({
+    url: fileUrl,
+    filename: req.file.originalname,
+    mimetype: req.file.mimetype,
+    size: req.file.size
+  });
+});
+
+// ==========================================
+// 2. USER PROFILE & SEARCH APIS
 // ==========================================
 
-// GET /api/users - List all users (sanitized for privacy)
+// GET /api/users - List users
 router.get('/users', (req, res) => {
   const currentUserId = req.user.id;
   const list = users
@@ -74,7 +101,7 @@ router.get('/users', (req, res) => {
   res.json({ users: list });
 });
 
-// GET /api/users/search?q=... - Search users
+// GET /api/users/search?q=... - Search registered users by Unique Code or Contact Number
 router.get('/users/search', (req, res) => {
   const { q } = req.query;
   const results = users.search(q, req.user.id);
@@ -90,7 +117,7 @@ router.get('/users/:id', (req, res) => {
   res.json({ user: sanitizeUser(user, req.user.id) });
 });
 
-// PUT /api/users/profile - Complete onboarding / update profile
+// PUT /api/users/profile - Complete / update mandatory profile details
 router.put('/users/profile', (req, res) => {
   const currentUserId = req.user.id;
   const currentUser = users.findById(currentUserId);
@@ -102,28 +129,29 @@ router.put('/users/profile', (req, res) => {
   const {
     displayName,
     username,
+    email,
     dob,
     mobileNumber,
     gender,
     avatar,
     bio,
-    location,
     interests,
-    privacy,
+    notificationsEnabled,
+    theme,
     status
   } = req.body;
 
   const updates = {};
 
-  // Display Name
+  // 1. Full Name
   if (displayName !== undefined) {
     if (!displayName.trim()) {
-      return res.status(400).json({ error: 'Display name cannot be empty' });
+      return res.status(400).json({ error: 'Full Name cannot be empty' });
     }
     updates.displayName = displayName.trim();
   }
 
-  // Username validation (must be unique)
+  // 2. Username (must be unique)
   if (username !== undefined) {
     const cleanUser = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
     if (!cleanUser || cleanUser.length < 3) {
@@ -136,55 +164,93 @@ router.put('/users/profile', (req, res) => {
     updates.username = cleanUser;
   }
 
-  // Mobile number validation (international format e.g. +14155552671)
-  if (mobileNumber !== undefined && mobileNumber !== '') {
+  // 3. Email (must be unique)
+  if (email !== undefined) {
+    const cleanEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
+    }
+    const existing = users.findByEmail(cleanEmail);
+    if (existing && existing.id !== currentUserId) {
+      return res.status(400).json({ error: 'This email is already registered to another account' });
+    }
+    updates.email = cleanEmail;
+  }
+
+  // 4. Contact Number (must be unique)
+  if (mobileNumber !== undefined) {
     const cleanPhone = mobileNumber.trim();
-    const phoneRegex = /^\+?[1-9]\d{7,14}$/;
-    if (!phoneRegex.test(cleanPhone)) {
-      return res.status(400).json({ error: 'Please enter a valid international mobile number (e.g. +14155552671)' });
+    const digits = cleanPhone.replace(/[^0-9]/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+      return res.status(400).json({ error: 'Please enter a valid contact number (7 to 15 digits)' });
+    }
+    const existing = users.findByMobile(cleanPhone);
+    if (existing && existing.id !== currentUserId) {
+      return res.status(400).json({ error: 'This contact number is already registered to another account' });
     }
     updates.mobileNumber = cleanPhone;
   }
 
-  // Date of Birth validation
-  if (dob !== undefined) {
-    updates.dob = dob.trim();
-  }
-
-  // Gender
+  // 5. Gender
   if (gender !== undefined) {
     updates.gender = gender.trim();
   }
 
-  // Avatar
-  if (avatar !== undefined) updates.avatar = avatar.trim();
+  // 6. Date of Birth
+  if (dob !== undefined) {
+    updates.dob = dob.trim();
+  }
 
-  // Bio, Location, Status
-  if (bio !== undefined) updates.bio = bio.trim();
-  if (location !== undefined) updates.location = location.trim();
-  if (status !== undefined) updates.status = status.trim();
+  // 7. Profile Photo
+  if (avatar !== undefined) {
+    updates.avatar = avatar.trim();
+  }
 
-  // Interests array
+  // 8. Interests
   if (interests !== undefined && Array.isArray(interests)) {
     updates.interests = interests.map((i) => String(i).trim()).filter(Boolean);
   }
 
-  // Privacy controls
-  if (privacy && typeof privacy === 'object') {
-    updates.privacy = {
-      ...(currentUser.privacy || {}),
-      ...privacy
-    };
+  // Optional status & bio
+  if (bio !== undefined) updates.bio = bio.trim();
+  if (status !== undefined) updates.status = status.trim();
+
+  // Settings: Notifications & Theme
+  if (notificationsEnabled !== undefined) {
+    updates.notificationsEnabled = Boolean(notificationsEnabled);
+  }
+  if (theme !== undefined && ['dark', 'light'].includes(theme)) {
+    updates.theme = theme;
   }
 
-  // Determine if profile is completed
-  const finalDob = updates.dob !== undefined ? updates.dob : currentUser.dob;
-  const finalMobile = updates.mobileNumber !== undefined ? updates.mobileNumber : currentUser.mobileNumber;
-  const finalGender = updates.gender !== undefined ? updates.gender : currentUser.gender;
+  // Check if all 8 mandatory fields are complete
+  const finalName = updates.displayName || currentUser.displayName;
+  const finalUser = updates.username || currentUser.username;
+  const finalEmail = updates.email || currentUser.email;
+  const finalPhone = updates.mobileNumber || currentUser.mobileNumber;
+  const finalGender = updates.gender || currentUser.gender;
+  const finalDob = updates.dob || currentUser.dob;
+  const finalAvatar = updates.avatar || currentUser.avatar;
+  const finalInterests = updates.interests || currentUser.interests;
 
-  if (finalDob && finalMobile && finalGender) {
+  if (
+    finalName?.trim() &&
+    finalUser?.trim() &&
+    finalEmail?.trim() &&
+    finalPhone?.trim() &&
+    finalGender?.trim() &&
+    finalDob?.trim() &&
+    finalAvatar?.trim() &&
+    Array.isArray(finalInterests) && finalInterests.length > 0
+  ) {
     updates.profileCompleted = true;
   }
+
+  // Explicit protection: Unique identification code and creation date can never be changed
+  delete updates.uniqueCode;
+  delete updates.createdAt;
+  delete updates.id;
 
   const updatedUser = users.update(currentUserId, updates);
 
@@ -194,8 +260,46 @@ router.put('/users/profile', (req, res) => {
   });
 });
 
+// DELETE /api/users/account - Delete user account with 10-day restriction
+router.delete('/users/account', (req, res) => {
+  const currentUserId = req.user.id;
+  const currentUser = users.findById(currentUserId);
+
+  if (!currentUser) {
+    return res.status(404).json({ error: 'User not found' });
+  }
+
+  const createdTime = new Date(currentUser.createdAt || Date.now()).getTime();
+  const TEN_DAYS_MS = 10 * 24 * 60 * 60 * 1000;
+  const elapsedMs = Date.now() - createdTime;
+
+  // Enforce 10-day restriction on the backend
+  if (elapsedMs < TEN_DAYS_MS) {
+    const remainingMs = TEN_DAYS_MS - elapsedMs;
+    const remainingDays = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
+    const remainingHours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const remainingMins = Math.floor((remainingMs % (1000 * 60 * 60)) / (1000 * 60));
+
+    return res.status(403).json({
+      error: `Account deletion is protected. You can delete your account after 10 days of creation. Remaining time: ${remainingDays}d ${remainingHours}h ${remainingMins}m.`,
+      remainingDays,
+      remainingHours,
+      remainingMins,
+      canDelete: false
+    });
+  }
+
+  // Process deletion
+  users.delete(currentUserId);
+
+  return res.json({
+    message: 'Your ChatSphere account has been permanently deleted.',
+    deleted: true
+  });
+});
+
 // ==========================================
-// 2. CONVERSATIONS (1-to-1) APIS
+// 3. CONVERSATIONS (1-to-1) APIS
 // ==========================================
 
 // GET /api/conversations - List all direct conversations
@@ -203,42 +307,26 @@ router.get('/conversations', (req, res) => {
   const currentUserId = req.user.id;
   const userConvs = conversations.findForUser(currentUserId);
 
-  const enrichedConvs = userConvs.map((conv) => {
-    const otherUserId = conv.participants.find((id) => id !== currentUserId) || currentUserId;
-    const otherUser = users.findById(otherUserId);
+  const enrichedConvs = userConvs
+    .map((conv) => {
+      const otherUserId = conv.participants.find((id) => id !== currentUserId) || currentUserId;
+      const otherUser = users.findById(otherUserId);
 
-    // Calculate unread count
-    const unreadCount = messages
-      .find((m) => m.conversationId === conv.id && m.recipientId === currentUserId && m.status !== 'read')
-      .length;
+      // Calculate unread count
+      const unreadCount = messages
+        .find((m) => m.conversationId === conv.id && m.recipientId === currentUserId && m.status !== 'read')
+        .length;
 
-    return {
-      id: conv.id,
-      otherUser: otherUser ? sanitizeUser(otherUser, currentUserId) : null,
-      lastMessage: conv.lastMessage ? enrichMessage(conv.lastMessage) : null,
-      unreadCount,
-      updatedAt: conv.updatedAt
-    };
-  }).filter((c) => c.otherUser !== null);
-
-  // Always ensure Nova AI is in conversations or readily discoverable
-  const hasAi = enrichedConvs.some((c) => c.otherUser?.id === 'usr_nova_ai');
-  if (!hasAi) {
-    const aiUser = users.findById('usr_nova_ai');
-    if (aiUser) {
-      enrichedConvs.unshift({
-        id: `conv_${[currentUserId, 'usr_nova_ai'].sort().join('_')}`,
-        otherUser: sanitizeUser(aiUser, currentUserId),
-        lastMessage: {
-          id: 'welcome_ai',
-          content: 'Hello! Ask me anything or request conversation summaries anytime ✨',
-          createdAt: new Date().toISOString()
-        },
-        unreadCount: 0,
-        updatedAt: new Date().toISOString()
-      });
-    }
-  }
+      return {
+        id: conv.id,
+        otherUser: otherUser ? sanitizeUser(otherUser, currentUserId) : null,
+        lastMessage: conv.lastMessage ? enrichMessage(conv.lastMessage) : null,
+        unreadCount,
+        updatedAt: conv.updatedAt
+      };
+    })
+    .filter((c) => c.otherUser !== null)
+    .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
 
   res.json({ conversations: enrichedConvs });
 });
@@ -249,7 +337,7 @@ router.post('/conversations', (req, res) => {
   const currentUserId = req.user.id;
 
   if (!targetUserId) {
-    return res.status(400).json({ error: 'Target user ID is required' });
+    return res.status(400).json({ error: 'targetUserId is required' });
   }
 
   const targetUser = users.findById(targetUserId);
@@ -259,151 +347,97 @@ router.post('/conversations', (req, res) => {
 
   const conv = conversations.findOrCreate(currentUserId, targetUserId);
 
-  res.status(201).json({
+  res.json({
     conversation: {
-      ...conv,
-      otherUser: sanitizeUser(targetUser, currentUserId)
+      id: conv.id,
+      otherUser: sanitizeUser(targetUser, currentUserId),
+      lastMessage: conv.lastMessage ? enrichMessage(conv.lastMessage) : null,
+      unreadCount: 0,
+      createdAt: conv.createdAt
     }
   });
 });
 
-// GET /api/conversations/:id/messages - Get messages for conversation
-router.get('/conversations/:id/messages', (req, res) => {
-  const convId = req.params.id;
+// GET /api/conversations/:targetUserId/messages - Get 1-to-1 message history
+router.get('/conversations/:targetUserId/messages', (req, res) => {
   const currentUserId = req.user.id;
+  const { targetUserId } = req.params;
 
-  const conv = conversations.findById(convId);
-  if (!conv || !conv.participants.includes(currentUserId)) {
-    return res.status(403).json({ error: 'Access denied to this conversation' });
-  }
+  const conv = conversations.findOrCreate(currentUserId, targetUserId);
 
-  const convMessages = messages
-    .find((m) => m.conversationId === convId)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-    .map(enrichMessage);
+  // Mark received messages as read
+  const convMsgs = messages
+    .find((m) => m.conversationId === conv.id)
+    .map((m) => {
+      if (m.recipientId === currentUserId && m.status !== 'read') {
+        m.status = 'read';
+        if (!m.readBy) m.readBy = [];
+        if (!m.readBy.includes(currentUserId)) m.readBy.push(currentUserId);
+        messages.update(m.id, { status: 'read', readBy: m.readBy });
+      }
+      return enrichMessage(m);
+    })
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
 
-  res.json({ messages: convMessages });
-});
-
-// ==========================================
-// 3. MESSAGES APIS
-// ==========================================
-
-// POST /api/messages - Send message via REST
-router.post('/messages', (req, res) => {
-  const { channelId, recipientId, content, attachment } = req.body;
-  const currentUserId = req.user.id;
-
-  if (!content?.trim() && !attachment) {
-    return res.status(400).json({ error: 'Message content or attachment is required' });
-  }
-
-  if (channelId) {
-    // Check channel membership
-    if (!channels.isMember(channelId, currentUserId)) {
-      return res.status(403).json({ error: 'You are not a member of this channel' });
-    }
-  }
-
-  let conversationId = null;
-  if (recipientId) {
-    const conv = conversations.findOrCreate(currentUserId, recipientId);
-    conversationId = conv.id;
-  }
-
-  const newMsg = {
-    id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    channelId: channelId || null,
-    conversationId,
-    recipientId: recipientId || null,
-    senderId: currentUserId,
-    content: content ? content.trim() : '',
-    attachment: attachment || null,
-    status: 'sent',
-    readBy: [currentUserId],
-    reactions: {},
-    createdAt: new Date().toISOString()
-  };
-
-  messages.create(newMsg);
-
-  if (conversationId) {
-    conversations.update(conversationId, { lastMessage: newMsg });
-  }
-
-  res.status(201).json({ message: enrichMessage(newMsg) });
-});
-
-// PUT /api/messages/:id/read - Mark message as read
-router.put('/messages/:id/read', (req, res) => {
-  const msgId = req.params.id;
-  const currentUserId = req.user.id;
-
-  const msg = messages.findById(msgId);
-  if (!msg) {
-    return res.status(404).json({ error: 'Message not found' });
-  }
-
-  const readBy = msg.readBy || [];
-  if (!readBy.includes(currentUserId)) {
-    readBy.push(currentUserId);
-  }
-
-  const updated = messages.update(msgId, {
-    status: 'read',
-    readBy
+  res.json({
+    conversationId: conv.id,
+    messages: convMsgs
   });
-
-  res.json({ message: enrichMessage(updated) });
 });
 
 // ==========================================
-// 4. CHANNELS WITH PASSCODES APIS
+// 4. CHANNELS MANAGEMENT APIS
 // ==========================================
 
-// GET /api/channels - List accessible channels
+// GET /api/channels - List channels (Vignan + User-created)
 router.get('/channels', (req, res) => {
   const currentUserId = req.user.id;
-  const allChannels = channels.find();
 
-  // Return public channels + private channels where current user is a member
-  const accessibleChannels = allChannels.map((c) => {
+  const list = channels.find().map((c) => {
     const isMember = channels.isMember(c.id, currentUserId);
     const isOwner = c.ownerId === currentUserId;
-    const msgCount = messages.find((m) => m.channelId === c.id).length;
 
     return {
       id: c.id,
       name: c.name,
-      description: c.description,
+      description: c.description || '',
       isPrivate: !!c.isPrivate,
       icon: c.icon || (c.isPrivate ? '🔒' : '💬'),
       ownerId: c.ownerId,
-      isOwner,
       isMember,
-      memberCount: (c.members || []).length,
-      // Only disclose passcode to the channel owner
+      isOwner,
+      // Never expose private channel passcodes publicly; only owner can view
       passcode: isOwner ? c.passcode : undefined,
-      messageCount: msgCount,
+      memberCount: Array.isArray(c.members) ? c.members.length : 0,
       createdAt: c.createdAt
     };
   });
 
-  res.json({ channels: accessibleChannels });
+  res.json({ channels: list });
 });
 
-// POST /api/channels - Create new channel
+// POST /api/channels - Create a public or private channel
 router.post('/channels', (req, res) => {
-  const { name, description, isPrivate, icon, passcode: customPasscode } = req.body;
+  const { name, description, isPrivate, passcode, icon } = req.body;
   const currentUserId = req.user.id;
 
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Channel name is required' });
   }
 
-  const cleanName = name.trim().toLowerCase().replace(/\s+/g, '-');
+  const cleanName = name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .slice(0, 30);
 
-  if (channels.findOne((c) => c.name === cleanName)) {
+  if (cleanName.length < 2) {
+    return res.status(400).json({ error: 'Channel name must be at least 2 characters' });
+  }
+
+  // Prevent duplicate channel names
+  const existing = channels.findOne((c) => c.name.toLowerCase() === cleanName);
+  if (existing) {
     return res.status(400).json({ error: 'A channel with this name already exists' });
   }
 
@@ -411,20 +445,23 @@ router.post('/channels', (req, res) => {
   let passcodeHash = null;
 
   if (isPrivate) {
-    finalPasscode = customPasscode?.trim() || generateChannelPasscode();
+    if (!passcode || !passcode.trim()) {
+      return res.status(400).json({ error: 'A passcode is mandatory for creating a private channel' });
+    }
+    finalPasscode = passcode.trim();
     passcodeHash = bcrypt.hashSync(finalPasscode, 8);
   }
 
   const newChannel = {
     id: `chan_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
     name: cleanName,
-    description: description?.trim() || '',
-    isPrivate: !!isPrivate,
+    description: description ? description.trim() : '',
+    isPrivate: Boolean(isPrivate),
     passcode: finalPasscode,
     passcodeHash,
     icon: icon || (isPrivate ? '🔒' : '💬'),
     ownerId: currentUserId,
-    members: [currentUserId], // Creator automatically becomes owner and first member!
+    members: [currentUserId], // Creator is the first member
     createdAt: new Date().toISOString()
   };
 
@@ -433,311 +470,175 @@ router.post('/channels', (req, res) => {
   res.status(201).json({
     message: 'Channel created successfully',
     channel: {
-      ...newChannel,
-      isOwner: true,
+      id: newChannel.id,
+      name: newChannel.name,
+      description: newChannel.description,
+      isPrivate: newChannel.isPrivate,
+      icon: newChannel.icon,
+      ownerId: newChannel.ownerId,
       isMember: true,
+      isOwner: true,
+      passcode: finalPasscode, // returned to creator once
       memberCount: 1,
-      passcode: finalPasscode
+      createdAt: newChannel.createdAt
     }
   });
 });
 
-// POST /api/channels/join - Join channel (validates passcode for private channels)
-router.post('/channels/join', (req, res) => {
-  const { channelId, passcode } = req.body;
+// POST /api/channels/:id/join - Join public or private channel with passcode validation
+router.post('/channels/:id/join', (req, res) => {
+  const { id } = req.params;
+  const { passcode } = req.body;
   const currentUserId = req.user.id;
 
-  if (!channelId) {
-    return res.status(400).json({ error: 'Channel ID is required' });
-  }
-
-  const channel = channels.findById(channelId);
+  const channel = channels.findById(id);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
-  // Already a member?
-  if (channel.members && channel.members.includes(currentUserId)) {
+  // If already member, return success
+  if (channels.isMember(id, currentUserId)) {
     return res.json({
-      message: 'You are already a member of this channel',
-      channel
+      message: 'Already a member of this channel',
+      channel: {
+        id: channel.id,
+        name: channel.name,
+        isPrivate: channel.isPrivate,
+        isMember: true
+      }
     });
   }
 
-  // Check passcode if private
+  // If private, validate passcode (Vignan channel: 1299)
   if (channel.isPrivate) {
     if (!passcode || !passcode.trim()) {
-      return res.status(403).json({ error: 'This is a private channel. A valid passcode is required to join.' });
+      return res.status(400).json({ error: 'Passcode is mandatory to join this private channel' });
     }
 
     const cleanInput = passcode.trim();
-    const isDirectMatch = channel.passcode && channel.passcode === cleanInput;
-    const isHashMatch = channel.passcodeHash && bcrypt.compareSync(cleanInput, channel.passcodeHash);
+    let isMatch = false;
 
-    if (!isDirectMatch && !isHashMatch) {
-      return res.status(403).json({ error: 'Invalid channel passcode. Please check and try again.' });
+    if (channel.passcodeHash) {
+      isMatch = bcrypt.compareSync(cleanInput, channel.passcodeHash);
+    }
+    if (!isMatch && channel.passcode) {
+      isMatch = channel.passcode === cleanInput;
+    }
+
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Incorrect channel passcode. Access denied.' });
     }
   }
 
-  // Add member
-  channels.addMember(channelId, currentUserId);
+  channels.addMember(id, currentUserId);
 
   res.json({
-    message: `Successfully joined #${channel.name}`,
+    message: 'Successfully joined channel',
     channel: {
-      ...channel,
+      id: channel.id,
+      name: channel.name,
+      description: channel.description,
+      isPrivate: channel.isPrivate,
       isMember: true,
-      memberCount: (channel.members || []).length
+      memberCount: channel.members.length
     }
   });
-});
-
-// GET /api/channels/:id - Get channel details and members
-router.get('/channels/:id', (req, res) => {
-  const channel = channels.findById(req.params.id);
-  const currentUserId = req.user.id;
-
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  if (channel.isPrivate && !channels.isMember(channel.id, currentUserId)) {
-    return res.status(403).json({ error: 'Access denied: You are not a member of this private channel' });
-  }
-
-  // Enrich members list
-  const memberUsers = (channel.members || []).map((uid) => {
-    const u = users.findById(uid);
-    return u ? sanitizeUser(u, currentUserId) : null;
-  }).filter(Boolean);
-
-  res.json({
-    channel: {
-      ...channel,
-      isOwner: channel.ownerId === currentUserId,
-      isMember: channels.isMember(channel.id, currentUserId),
-      passcode: channel.ownerId === currentUserId ? channel.passcode : undefined,
-      membersList: memberUsers
-    }
-  });
-});
-
-// GET /api/channels/:id/messages - Get channel messages (strictly checks membership!)
-router.get('/channels/:id/messages', (req, res) => {
-  const channelId = req.params.id;
-  const currentUserId = req.user.id;
-
-  const channel = channels.findById(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  if (channel.isPrivate && !channels.isMember(channelId, currentUserId)) {
-    return res.status(403).json({ error: 'Access denied: You must join this channel with a passcode to view messages' });
-  }
-
-  const channelMsgs = messages
-    .find((m) => m.channelId === channelId)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-    .map(enrichMessage);
-
-  res.json({ messages: channelMsgs });
 });
 
 // POST /api/channels/:id/leave - Leave a channel
 router.post('/channels/:id/leave', (req, res) => {
-  const channelId = req.params.id;
+  const { id } = req.params;
   const currentUserId = req.user.id;
 
-  const channel = channels.findById(channelId);
+  const channel = channels.findById(id);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
-  if (channel.ownerId === currentUserId) {
-    return res.status(400).json({ error: 'Channel owner cannot leave. You can delete the channel instead.' });
-  }
-
-  channels.removeMember(channelId, currentUserId);
-  res.json({ message: `Left channel #${channel.name}` });
-});
-
-// PUT /api/channels/:id/passcode - Regenerate channel passcode (owner only)
-router.put('/channels/:id/passcode', (req, res) => {
-  const channelId = req.params.id;
-  const currentUserId = req.user.id;
-
-  const channel = channels.findById(channelId);
-  if (!channel) {
-    return res.status(404).json({ error: 'Channel not found' });
-  }
-
-  if (channel.ownerId !== currentUserId) {
-    return res.status(403).json({ error: 'Only the channel owner can regenerate the passcode' });
-  }
-
-  const newPasscode = generateChannelPasscode();
-  const passcodeHash = bcrypt.hashSync(newPasscode, 8);
-
-  const updated = channels.update(channelId, {
-    passcode: newPasscode,
-    passcodeHash
-  });
+  channels.removeMember(id, currentUserId);
 
   res.json({
-    message: 'Channel passcode regenerated successfully',
-    passcode: newPasscode
+    message: 'Left channel successfully',
+    channelId: id
   });
 });
 
-// DELETE /api/channels/:id - Delete channel (owner only)
+// GET /api/channels/:id/messages - Get channel message stream
+router.get('/channels/:id/messages', (req, res) => {
+  const { id } = req.params;
+  const currentUserId = req.user.id;
+
+  const channel = channels.findById(id);
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+
+  if (channel.isPrivate && !channels.isMember(id, currentUserId)) {
+    return res.status(403).json({ error: 'Passcode required. You must join this channel first.' });
+  }
+
+  const chanMsgs = messages
+    .find((m) => m.channelId === id)
+    .map(enrichMessage)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  res.json({
+    channelId: id,
+    messages: chanMsgs
+  });
+});
+
+// GET /api/channels/:id - Get channel details
+router.get('/channels/:id', (req, res) => {
+  const { id } = req.params;
+  const currentUserId = req.user.id;
+
+  const channel = channels.findById(id);
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+
+  const isOwner = channel.ownerId === currentUserId;
+  const isMember = channels.isMember(id, currentUserId);
+
+  res.json({
+    channel: {
+      id: channel.id,
+      name: channel.name,
+      description: channel.description,
+      isPrivate: channel.isPrivate,
+      icon: channel.icon,
+      ownerId: channel.ownerId,
+      isMember,
+      isOwner,
+      passcode: isOwner ? channel.passcode : undefined,
+      memberCount: Array.isArray(channel.members) ? channel.members.length : 0,
+      createdAt: channel.createdAt
+    }
+  });
+});
+
+// DELETE /api/channels/:id - Delete a channel (owner only)
 router.delete('/channels/:id', (req, res) => {
-  const channelId = req.params.id;
+  const { id } = req.params;
   const currentUserId = req.user.id;
 
-  const channel = channels.findById(channelId);
+  const channel = channels.findById(id);
   if (!channel) {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
+  // Prevent deleting Vignan channel
+  if (channel.name.toLowerCase() === 'vignan') {
+    return res.status(403).json({ error: 'The Vignan channel is protected and cannot be deleted.' });
+  }
+
   if (channel.ownerId !== currentUserId) {
-    return res.status(403).json({ error: 'Only the channel owner can delete this channel' });
+    return res.status(403).json({ error: 'Only the channel creator can delete this channel.' });
   }
 
-  channels.delete(channelId);
+  channels.delete(id);
   res.json({ message: 'Channel deleted successfully' });
-});
-
-// ==========================================
-// 5. AI ASSISTANT (NOVA AI) APIS
-// ==========================================
-
-// POST /api/ai/chat - Ask Nova AI
-router.post('/ai/chat', async (req, res) => {
-  try {
-    const { prompt, context } = req.body;
-    if (!prompt || !prompt.trim()) {
-      return res.status(400).json({ error: 'Prompt is required' });
-    }
-
-    const reply = await getAgentReply(prompt.trim(), context);
-    res.json({
-      reply,
-      agent: AI_AGENT_PROFILE,
-      hasLiveGemini: !!process.env.GEMINI_API_KEY
-    });
-  } catch (err) {
-    console.error('Nova AI chat error:', err);
-    res.status(500).json({ error: 'Failed to process AI request' });
-  }
-});
-
-// POST /api/ai/smart-reply - Generate 3 quick smart reply chips
-router.post('/ai/smart-reply', async (req, res) => {
-  try {
-    const { messageContent } = req.body;
-    const suggestions = await generateSmartReplies(messageContent);
-    res.json({ suggestions });
-  } catch (err) {
-    console.error('Nova AI smart-reply error:', err);
-    res.status(500).json({ error: 'Failed to generate smart replies' });
-  }
-});
-
-// POST /api/ai/summarize - Summarize channel or conversation
-router.post('/api/ai/summarize', async (req, res) => {
-  try {
-    const { channelId, targetUserId } = req.body;
-    let msgs = [];
-
-    if (channelId) {
-      if (!channels.isMember(channelId, req.user.id)) {
-        return res.status(403).json({ error: 'Access denied: not a member of this channel' });
-      }
-      msgs = messages
-        .find((m) => m.channelId === channelId)
-        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-        .map(enrichMessage);
-    } else if (targetUserId) {
-      const currentUserId = req.user.id;
-      msgs = messages
-        .find(
-          (m) =>
-            (m.senderId === currentUserId && m.recipientId === targetUserId) ||
-            (m.senderId === targetUserId && m.recipientId === currentUserId)
-        )
-        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-        .map(enrichMessage);
-    }
-
-    const summary = await summarizeChat(msgs);
-    res.json({ summary });
-  } catch (err) {
-    console.error('Nova AI summarize error:', err);
-    res.status(500).json({ error: 'Failed to generate summary' });
-  }
-});
-
-// Also support legacy endpoint `/ai/summarize` for backward compatibility
-router.post('/ai/summarize', async (req, res) => {
-  const { channelId, targetUserId } = req.body;
-  let msgs = [];
-  if (channelId) {
-    msgs = messages.find((m) => m.channelId === channelId).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).map(enrichMessage);
-  } else if (targetUserId) {
-    const currentUserId = req.user.id;
-    msgs = messages.find((m) => (m.senderId === currentUserId && m.recipientId === targetUserId) || (m.senderId === targetUserId && m.recipientId === currentUserId)).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt)).map(enrichMessage);
-  }
-  const summary = await summarizeChat(msgs);
-  res.json({ summary });
-});
-
-// ==========================================
-// 6. UPLOAD & REACTIONS APIS
-// ==========================================
-
-router.post('/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
-
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({
-    url: fileUrl,
-    filename: req.file.originalname,
-    mimetype: req.file.mimetype,
-    size: req.file.size
-  });
-});
-
-router.post('/messages/:messageId/reactions', (req, res) => {
-  const { messageId } = req.params;
-  const { emoji } = req.body;
-  const userId = req.user.id;
-
-  if (!emoji) {
-    return res.status(400).json({ error: 'Emoji is required' });
-  }
-
-  const msg = messages.findById(messageId);
-  if (!msg) {
-    return res.status(404).json({ error: 'Message not found' });
-  }
-
-  const currentReactions = msg.reactions || {};
-  const usersForEmoji = currentReactions[emoji] || [];
-
-  if (usersForEmoji.includes(userId)) {
-    currentReactions[emoji] = usersForEmoji.filter((id) => id !== userId);
-    if (currentReactions[emoji].length === 0) {
-      delete currentReactions[emoji];
-    }
-  } else {
-    currentReactions[emoji] = [...usersForEmoji, userId];
-  }
-
-  const updated = messages.update(messageId, { reactions: currentReactions });
-  res.json({ message: enrichMessage(updated) });
 });
 
 module.exports = {

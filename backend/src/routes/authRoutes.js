@@ -1,151 +1,184 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { users, sanitizeUser } = require('../db');
+const { users, sanitizeUser, generateUniqueCode } = require('../db');
 const { signToken, authMiddleware, verifyFirebaseIdToken } = require('../auth');
 
 const router = express.Router();
 
 /**
- * GET /api/auth/firebase-config
- * Returns public Firebase configuration keys from backend environment.
- * Allows frontend to initialize Firebase at runtime even if built without VITE_* env vars.
+ * Helper to validate mobile number format (at least 7 to 15 digits)
  */
-router.get('/firebase-config', (req, res) => {
-  const config = {
-    apiKey: process.env.VITE_FIREBASE_API_KEY || process.env.FIREBASE_API_KEY || '',
-    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || process.env.FIREBASE_AUTH_DOMAIN || '',
-    projectId: process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || '',
-    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || process.env.FIREBASE_STORAGE_BUCKET || '',
-    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || process.env.FIREBASE_MESSAGING_SENDER_ID || '',
-    appId: process.env.VITE_FIREBASE_APP_ID || process.env.FIREBASE_APP_ID || ''
-  };
-
-  const isConfigured = Boolean(
-    config.apiKey &&
-    !config.apiKey.includes('Placeholder') &&
-    config.projectId &&
-    !config.projectId.includes('placeholder')
-  );
-
-  return res.json({
-    configured: isConfigured,
-    config: isConfigured ? config : null
-  });
-});
+function isValidPhoneNumber(phone) {
+  if (!phone) return false;
+  const digits = phone.replace(/[^0-9]/g, '');
+  return digits.length >= 7 && digits.length <= 15;
+}
 
 /**
- * POST /api/auth/verify
- * Secure Firebase Authentication Verification endpoint (Google & Email/Password)
- * Does NOT trust client-supplied user profile directly — verifies the cryptographic Firebase ID token!
+ * Helper to check if all 8 mandatory fields are satisfied
  */
-router.post('/verify', async (req, res) => {
+function checkProfileCompleted(user) {
+  return Boolean(
+    user.displayName?.trim() &&
+    user.username?.trim() &&
+    user.gender?.trim() &&
+    user.dob?.trim() &&
+    user.mobileNumber?.trim() &&
+    user.email?.trim() &&
+    user.avatar?.trim() &&
+    Array.isArray(user.interests) && user.interests.length > 0
+  );
+}
+
+/**
+ * POST /api/auth/register
+ * Register a brand new user with mandatory validations and automatic unique code generation.
+ */
+router.post('/register', async (req, res) => {
   try {
-    const { idToken, username: requestedUsername, displayName: requestedDisplayName } = req.body;
+    const {
+      displayName,
+      username,
+      email,
+      password,
+      mobileNumber,
+      gender,
+      dob,
+      avatar,
+      interests
+    } = req.body;
 
-    if (!idToken) {
-      return res.status(400).json({ error: 'Firebase ID token is required' });
+    // 1. Mandatory field checks for account creation
+    if (!displayName?.trim()) {
+      return res.status(400).json({ error: 'Full Name is required' });
+    }
+    if (!username?.trim()) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+    if (!email?.trim()) {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+    if (!password || password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters long' });
+    }
+    if (!mobileNumber?.trim()) {
+      return res.status(400).json({ error: 'Contact number is required' });
     }
 
-    // Verify token using Firebase Admin SDK or claim verification
-    const decoded = await verifyFirebaseIdToken(idToken);
-    const { uid, email, name, picture } = decoded;
-
-    if (!email) {
-      return res.status(400).json({ error: 'Verified Firebase token must include an email address' });
+    const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_]/g, '');
+    if (cleanUsername.length < 3) {
+      return res.status(400).json({ error: 'Username must be at least 3 alphanumeric characters' });
     }
 
-    const cleanEmail = email.toLowerCase().trim();
-    let user = users.findByFirebaseUid(uid) || users.findByEmail(cleanEmail);
-
-    let isNewUser = false;
-
-    if (!user) {
-      isNewUser = true;
-      let finalUsername = '';
-
-      if (requestedUsername && !users.findByUsername(requestedUsername.trim().toLowerCase())) {
-        finalUsername = requestedUsername.trim().toLowerCase();
-      } else {
-        const baseUsername = (requestedDisplayName || name || cleanEmail.split('@')[0])
-          .toLowerCase()
-          .replace(/[^a-z0-9]/g, '_')
-          .slice(0, 15);
-        const uniqueSuffix = Math.random().toString(36).substring(2, 6);
-        finalUsername = `${baseUsername}_${uniqueSuffix}`;
-      }
-
-      user = {
-        id: `usr_${uid.substring(0, 8)}_${Math.random().toString(36).substring(2, 6)}`,
-        firebaseUid: uid,
-        username: finalUsername,
-        email: cleanEmail,
-        displayName: requestedDisplayName || name || finalUsername,
-        passwordHash: 'firebase_oauth_protected',
-        avatar: picture || `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanEmail}`,
-        dob: '',
-        mobileNumber: '',
-        gender: '',
-        bio: 'Hey there! I am using ChatSphere.',
-        location: '',
-        interests: ['ChatSphere'],
-        privacy: { showDob: false, showMobile: false, showLocation: true },
-        profileCompleted: false, // Triggers initial profile completion flow
-        status: 'Available on ChatSphere',
-        createdAt: new Date().toISOString()
-      };
-
-      users.create(user);
-    } else {
-      // If user existed without firebaseUid, link it
-      const updates = {};
-      if (!user.firebaseUid) updates.firebaseUid = uid;
-      if (picture && (!user.avatar || user.avatar.includes('dicebear'))) updates.avatar = picture;
-      if (requestedDisplayName && (!user.displayName || user.displayName === user.username)) {
-        updates.displayName = requestedDisplayName;
-      }
-      if (Object.keys(updates).length > 0) {
-        user = users.update(user.id, updates);
-      }
-      isNewUser = !user.profileCompleted;
+    const cleanEmail = email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' });
     }
 
-    const token = signToken(user);
+    const cleanPhone = mobileNumber.trim();
+    if (!isValidPhoneNumber(cleanPhone)) {
+      return res.status(400).json({ error: 'Please enter a valid contact number (7-15 digits)' });
+    }
 
-    return res.json({
-      message: 'Authentication verified successfully',
-      user: sanitizeUser(user, user.id),
+    // 2. Prevent duplicate username
+    if (users.findByUsername(cleanUsername)) {
+      return res.status(400).json({ error: 'Username is already taken. Please choose another.' });
+    }
+
+    // 3. Prevent duplicate email
+    if (users.findByEmail(cleanEmail)) {
+      return res.status(400).json({ error: 'An account with this email address already exists.' });
+    }
+
+    // 4. Prevent duplicate contact number
+    if (users.findByMobile(cleanPhone)) {
+      return res.status(400).json({ error: 'This contact number is already registered with another account.' });
+    }
+
+    // 5. Generate secure password hash
+    const salt = bcrypt.genSaltSync(10);
+    const passwordHash = bcrypt.hashSync(password, salt);
+
+    // 6. Generate automatic permanent unique alphanumeric identification code (e.g. CS8K92A)
+    const uniqueCode = generateUniqueCode();
+
+    const cleanInterests = Array.isArray(interests)
+      ? interests.map((i) => String(i).trim()).filter(Boolean)
+      : [];
+
+    const defaultAvatar = avatar?.trim() ||
+      `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName.trim())}`;
+
+    const newUser = {
+      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      uniqueCode,
+      displayName: displayName.trim(),
+      username: cleanUsername,
+      email: cleanEmail,
+      passwordHash,
+      mobileNumber: cleanPhone,
+      gender: gender?.trim() || '',
+      dob: dob?.trim() || '',
+      avatar: defaultAvatar,
+      bio: '',
+      interests: cleanInterests,
+      notificationsEnabled: true,
+      theme: 'dark',
+      profileCompleted: false,
+      status: 'Active on ChatSphere',
+      createdAt: new Date().toISOString()
+    };
+
+    // Check if user immediately completed all 8 mandatory fields
+    newUser.profileCompleted = checkProfileCompleted(newUser);
+
+    users.create(newUser);
+    const token = signToken(newUser);
+
+    return res.status(201).json({
+      message: 'Account registered successfully',
+      user: sanitizeUser(newUser, newUser.id),
       token,
-      isNewUser
+      isNewUser: !newUser.profileCompleted
     });
   } catch (err) {
-    console.error('Firebase token verification error in /api/auth/verify:', err);
-    return res.status(401).json({ error: err.message || 'Firebase ID token verification failed' });
+    console.error('Registration error:', err);
+    return res.status(500).json({ error: 'Internal server error during registration' });
   }
 });
 
-// Standard Login (fallback if Firebase is not enabled or for demo accounts)
+/**
+ * POST /api/auth/login
+ * Log in with Email or Username + Password
+ */
 router.post('/login', async (req, res) => {
   try {
     const { login, password } = req.body;
 
     if (!login || !password) {
-      return res.status(400).json({ error: 'Username/Email and password are required' });
+      return res.status(400).json({ error: 'Please enter your username or email, and password' });
     }
 
     const clean = login.trim().toLowerCase();
-    const user = users.findOne((u) => u.username?.toLowerCase() === clean || u.email?.toLowerCase() === clean);
+    const user = users.findOne(
+      (u) =>
+        u.username?.toLowerCase() === clean ||
+        u.email?.toLowerCase() === clean ||
+        u.uniqueCode?.toLowerCase() === clean
+    );
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'Invalid credentials. User not found.' });
     }
 
-    if (user.isAgent) {
-      return res.status(403).json({ error: 'System AI bot cannot be logged into directly' });
+    if (user.passwordHash === 'firebase_oauth_protected' && !password) {
+      return res.status(401).json({ error: 'Please sign in using Google OAuth.' });
     }
 
     const isMatch = bcrypt.compareSync(password, user.passwordHash);
     if (!isMatch) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({ error: 'Incorrect password. Please try again.' });
     }
 
     const token = signToken(user);
@@ -162,64 +195,91 @@ router.post('/login', async (req, res) => {
   }
 });
 
-// Standard Register (fallback if Firebase is not enabled)
-router.post('/register', async (req, res) => {
+/**
+ * POST /api/auth/verify
+ * Firebase OAuth Verification endpoint (optional Google OAuth fallback)
+ */
+router.post('/verify', async (req, res) => {
   try {
-    const { username, email, password, displayName, avatar } = req.body;
+    const { idToken, username: requestedUsername, displayName: requestedDisplayName } = req.body;
 
-    if (!username || !email || !password) {
-      return res.status(400).json({ error: 'Username, email, and password are required' });
+    if (!idToken) {
+      return res.status(400).json({ error: 'Firebase ID token is required' });
     }
 
-    const cleanUsername = username.trim().toLowerCase();
-    const cleanEmail = email.trim().toLowerCase();
+    const decoded = await verifyFirebaseIdToken(idToken);
+    const { uid, email, name, picture } = decoded;
 
-    if (users.findByUsername(cleanUsername)) {
-      return res.status(400).json({ error: 'Username is already taken' });
+    if (!email) {
+      return res.status(400).json({ error: 'Verified token must include an email address' });
     }
 
-    if (users.findByEmail(cleanEmail)) {
-      return res.status(400).json({ error: 'Email is already registered' });
+    const cleanEmail = email.toLowerCase().trim();
+    let user = users.findByFirebaseUid(uid) || users.findByEmail(cleanEmail);
+    let isNewUser = false;
+
+    if (!user) {
+      isNewUser = true;
+      let finalUsername = '';
+
+      if (requestedUsername && !users.findByUsername(requestedUsername.trim().toLowerCase())) {
+        finalUsername = requestedUsername.trim().toLowerCase();
+      } else {
+        const base = (requestedDisplayName || name || cleanEmail.split('@')[0])
+          .toLowerCase()
+          .replace(/[^a-z0-9]/g, '_')
+          .slice(0, 12);
+        const suffix = Math.random().toString(36).substring(2, 6);
+        finalUsername = `${base}_${suffix}`;
+      }
+
+      user = {
+        id: `usr_${uid.substring(0, 8)}_${Math.random().toString(36).substring(2, 6)}`,
+        uniqueCode: generateUniqueCode(),
+        firebaseUid: uid,
+        username: finalUsername,
+        email: cleanEmail,
+        displayName: requestedDisplayName || name || finalUsername,
+        passwordHash: 'firebase_oauth_protected',
+        avatar: picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(finalUsername)}`,
+        dob: '',
+        mobileNumber: '',
+        gender: '',
+        bio: '',
+        interests: [],
+        notificationsEnabled: true,
+        theme: 'dark',
+        profileCompleted: false,
+        status: 'Active on ChatSphere',
+        createdAt: new Date().toISOString()
+      };
+
+      users.create(user);
+    } else {
+      if (!user.uniqueCode) {
+        user = users.update(user.id, { uniqueCode: generateUniqueCode() }) || user;
+      }
+      isNewUser = !user.profileCompleted;
     }
 
-    const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync(password, salt);
+    const token = signToken(user);
 
-    const newUser = {
-      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      username: cleanUsername,
-      email: cleanEmail,
-      displayName: displayName?.trim() || cleanUsername,
-      passwordHash,
-      avatar: avatar?.trim() || `https://api.dicebear.com/7.x/bottts/svg?seed=${cleanUsername}`,
-      dob: '',
-      mobileNumber: '',
-      gender: '',
-      bio: 'New member of ChatSphere!',
-      location: '',
-      interests: [],
-      privacy: { showDob: false, showMobile: false, showLocation: true },
-      profileCompleted: false,
-      status: 'Available',
-      createdAt: new Date().toISOString()
-    };
-
-    users.create(newUser);
-    const token = signToken(newUser);
-
-    return res.status(201).json({
-      message: 'Registration successful',
-      user: sanitizeUser(newUser, newUser.id),
+    return res.json({
+      message: 'Authentication verified successfully',
+      user: sanitizeUser(user, user.id),
       token,
-      isNewUser: true
+      isNewUser
     });
   } catch (err) {
-    console.error('Registration error:', err);
-    return res.status(500).json({ error: 'Internal server error during registration' });
+    console.error('Firebase token verification error in /api/auth/verify:', err);
+    return res.status(401).json({ error: err.message || 'Authentication verification failed' });
   }
 });
 
-// Current User Profile
+/**
+ * GET /api/auth/me
+ * Get current authenticated user
+ */
 router.get('/me', authMiddleware, (req, res) => {
   const user = users.findById(req.user.id);
   if (!user) {
@@ -229,9 +289,13 @@ router.get('/me', authMiddleware, (req, res) => {
   return res.json({ user: sanitizeUser(user, user.id) });
 });
 
-// Logout
+/**
+ * POST /api/auth/logout
+ */
 router.post('/logout', authMiddleware, (req, res) => {
   return res.json({ message: 'Logged out successfully' });
 });
 
 module.exports = router;
+module.exports.checkProfileCompleted = checkProfileCompleted;
+module.exports.isValidPhoneNumber = isValidPhoneNumber;

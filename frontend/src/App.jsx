@@ -3,41 +3,65 @@ import { useAuth } from './context/AuthContext';
 import { SocketProvider } from './context/SocketContext';
 import LoginModal from './components/auth/LoginModal';
 import OnboardingModal from './components/profile/OnboardingModal';
+import ProfileModal from './components/profile/ProfileModal';
+import SettingsModal from './components/settings/SettingsModal';
+import HelpModal from './components/help/HelpModal';
+import TopHeader from './components/header/TopHeader';
 import Sidebar from './components/sidebar/Sidebar';
 import ChatArea from './components/chat/ChatArea';
 import RightDetailsSidebar from './components/chat/RightDetailsSidebar';
-import AiAssistantDrawer from './components/ai/AiAssistantDrawer';
 import ChatSphereLogo from './components/common/ChatSphereLogo';
 
 function AuthenticatedApp() {
-  const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
-  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   return (
     <SocketProvider>
-      <div className="flex h-screen w-screen bg-slate-950 overflow-hidden font-sans text-slate-100">
-        {/* Left Navigation Sidebar */}
-        <Sidebar onOpenAiDrawer={() => setIsAiDrawerOpen(true)} />
-
-        {/* Central Chat View */}
-        <main className="flex-1 flex flex-col min-w-0 h-full relative">
-          <ChatArea
-            onOpenAiDrawer={() => setIsAiDrawerOpen(true)}
-            onToggleRightSidebar={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-            isRightSidebarOpen={isRightSidebarOpen}
-          />
-        </main>
-
-        {/* Right Details Sidebar (Profile & Channel info, shared media, passcode) */}
-        <RightDetailsSidebar
-          isOpen={isRightSidebarOpen}
-          onClose={() => setIsRightSidebarOpen(false)}
+      <div className="flex flex-col h-screen w-screen bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
+        {/* Top Navigation Header with Unique Code & Profile Dropdown */}
+        <TopHeader
+          onOpenProfile={() => setIsProfileOpen(true)}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenHelp={() => setIsHelpOpen(true)}
         />
 
-        {/* Nova AI Slide-out Assistant Drawer */}
-        <AiAssistantDrawer
-          isOpen={isAiDrawerOpen}
-          onClose={() => setIsAiDrawerOpen(false)}
+        {/* Main Work Area */}
+        <div className="flex-1 flex min-w-0 h-[calc(100vh-4rem)] overflow-hidden">
+          {/* Left Navigation Sidebar */}
+          <Sidebar onOpenProfile={() => setIsProfileOpen(true)} />
+
+          {/* Central Real-time Chat View */}
+          <main className="flex-1 flex flex-col min-w-0 h-full relative">
+            <ChatArea
+              onToggleRightSidebar={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+              isRightSidebarOpen={isRightSidebarOpen}
+            />
+          </main>
+
+          {/* Right Details Sidebar */}
+          <RightDetailsSidebar
+            isOpen={isRightSidebarOpen}
+            onClose={() => setIsRightSidebarOpen(false)}
+          />
+        </div>
+
+        {/* Global Modals */}
+        <ProfileModal
+          isOpen={isProfileOpen}
+          onClose={() => setIsProfileOpen(false)}
+        />
+
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+
+        <HelpModal
+          isOpen={isHelpOpen}
+          onClose={() => setIsHelpOpen(false)}
         />
       </div>
     </SocketProvider>
@@ -49,11 +73,11 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-slate-950 text-white select-none">
+      <div className="flex h-screen w-screen items-center justify-center bg-white dark:bg-slate-950 text-slate-900 dark:text-white select-none transition-colors">
         <div className="flex flex-col items-center gap-4">
           <ChatSphereLogo size={64} className="animate-pulse" />
           <div className="text-center">
-            <h1 className="text-lg font-bold text-white tracking-tight">ChatSphere</h1>
+            <h1 className="text-lg font-bold text-slate-900 dark:text-white tracking-tight">ChatSphere</h1>
             <p className="text-xs text-slate-400 mt-0.5">Connecting to real-time network...</p>
           </div>
         </div>
@@ -68,7 +92,7 @@ export default function App() {
   return (
     <>
       <AuthenticatedApp />
-      {/* Onboarding profile completion modal for new Google OAuth sign-ins */}
+      {/* Onboarding profile completion modal if mandatory profile fields are missing */}
       <OnboardingModal isOpen={showOnboarding || !user?.profileCompleted} />
     </>
   );
