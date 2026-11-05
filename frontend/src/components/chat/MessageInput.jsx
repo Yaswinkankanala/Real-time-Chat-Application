@@ -108,7 +108,7 @@ export default function MessageInput() {
   };
 
   return (
-    <div className="p-3 sm:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 transition-colors select-none shrink-0">
+    <div className="p-2 sm:p-4 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 transition-colors select-none shrink-0 pb-safe">
       {/* Attachment Preview */}
       {attachment && (
         <div className="mb-2 p-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-between text-xs animate-fade-in">

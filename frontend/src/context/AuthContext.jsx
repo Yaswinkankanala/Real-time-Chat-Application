@@ -174,6 +174,7 @@ export const AuthProvider = ({ children }) => {
           );
           if (fbRes && fbRes.idToken) {
             const res = await api.verifyFirebaseToken(fbRes.idToken, {
+              isSignUp: true,
               username: data.username,
               displayName: data.displayName,
               mobileNumber: data.mobileNumber,
@@ -186,7 +187,17 @@ export const AuthProvider = ({ children }) => {
             return res;
           }
         } catch (fbErr) {
-          // Fallback to backend direct registration
+          const errMsg = fbErr?.message || '';
+          // If Firebase reports email is in use or already exists, never swallow it!
+          if (
+            fbErr?.code === 'auth/email-already-in-use' ||
+            errMsg.includes('already registered') ||
+            errMsg.includes('already exists') ||
+            errMsg.includes('already-in-use')
+          ) {
+            throw new Error('This email address is already registered. Please log in instead.');
+          }
+          // Only fallback to backend direct registration if Firebase client encountered network/config issue
         }
       }
 
@@ -203,7 +214,7 @@ export const AuthProvider = ({ children }) => {
   /**
    * Google OAuth Login & Registration using Firebase
    */
-  const loginWithGoogleAuth = async () => {
+  const loginWithGoogleAuth = async (isSignUp = false) => {
     setAuthError(null);
     try {
       const gResult = await signInWithGoogle();
@@ -215,7 +226,8 @@ export const AuthProvider = ({ children }) => {
       }
       const res = await api.verifyFirebaseToken(gResult.idToken, {
         displayName: gResult.user?.displayName,
-        avatar: gResult.user?.photoURL
+        avatar: gResult.user?.photoURL,
+        isSignUp
       });
       handleAuthSuccess(res);
       return res;

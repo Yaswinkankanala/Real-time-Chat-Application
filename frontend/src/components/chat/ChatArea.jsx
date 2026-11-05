@@ -12,7 +12,8 @@ import {
   Sparkles,
   LogOut,
   Bot,
-  Compass
+  Compass,
+  ArrowLeft
 } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import MessageItem from './MessageItem';
@@ -20,6 +21,7 @@ import MessageInput from './MessageInput';
 import FindPeopleModal from './FindPeopleModal';
 import AiChatSummaryModal from './AiChatSummaryModal';
 import AiAgentView from '../ai/AiAgentView';
+import ChatSphere3DHero from '../common/ChatSphere3DHero';
 import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
@@ -65,15 +67,15 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
   // Dashboard / Empty state when no chat or channel is currently open
   if (!activeTarget) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 text-center bg-white dark:bg-slate-950/60 select-none transition-colors">
-        <div className="w-16 h-16 rounded-3xl bg-indigo-50 dark:bg-indigo-600/10 border border-indigo-100 dark:border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-4 animate-bounce-short">
-          <MessageSquare className="w-8 h-8" />
+      <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 text-center bg-white dark:bg-slate-950/60 select-none transition-colors overflow-y-auto">
+        <div className="mb-4">
+          <ChatSphere3DHero size="default" />
         </div>
-        <h2 className="text-xl font-extrabold text-slate-900 dark:text-white mb-2">
+        <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mb-2 tracking-tight">
           ChatSphere Dashboard
         </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm mb-6 leading-relaxed">
-          Select a conversation from the sidebar, search for friends using their Unique Code or Phone, or ask ChatSphere AI.
+        <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-sm mb-6 leading-relaxed">
+          Select a conversation from the sidebar, search for friends using their Unique Code or Phone, or explore ChatSphere AI.
         </p>
 
         {/* Quick Action Cards */}
@@ -127,8 +129,18 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
   return (
     <div className="flex-1 flex flex-col h-full bg-slate-50/50 dark:bg-slate-950/40 relative min-w-0 transition-colors">
       {/* Top Header */}
-      <div className="h-16 px-4 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl flex items-center justify-between shrink-0 transition-colors">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="h-16 px-3 sm:px-6 border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/60 backdrop-blur-xl flex items-center justify-between shrink-0 transition-colors">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          {/* Mobile Back Button: return to sidebar list immediately */}
+          <button
+            type="button"
+            onClick={handleExit}
+            className="md:hidden p-1.5 -ml-1 rounded-xl text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition active:scale-95"
+            title="Back to conversation list"
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+
           {isChannel ? (
             <div className="w-9 h-9 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center border border-indigo-100 dark:border-indigo-500/20 shrink-0">
               {activeTarget.details?.isPrivate ? (
@@ -152,15 +164,15 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
           )}
 
           <div className="min-w-0">
-            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2 truncate">
-              <span>{isChannel ? `#${activeTarget.details?.name}` : activeTarget.details?.displayName}</span>
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 truncate">
+              <span className="truncate">{isChannel ? `#${activeTarget.details?.name}` : activeTarget.details?.displayName}</span>
               {isChannel && activeTarget.details?.isPrivate && (
-                <span className="px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[10px] font-semibold">
+                <span className="px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 text-[10px] font-semibold shrink-0">
                   Private
                 </span>
               )}
               {isDirect && activeTarget.details?.uniqueCode && (
-                <span className="px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-mono text-[10px] font-bold">
+                <span className="px-1.5 py-0.2 rounded bg-indigo-50 dark:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 font-mono text-[10px] font-bold shrink-0">
                   {activeTarget.details.uniqueCode}
                 </span>
               )}
@@ -176,17 +188,17 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
         </div>
 
         {/* Header Right Actions */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           {/* AI Chat Summary: Exclusively for 1-to-1 Personal Conversations (FEATURE 2) */}
           {isDirect && (
             <button
               type="button"
               onClick={() => setIsSummaryOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/60 hover:border-indigo-400 dark:hover:border-indigo-600 font-bold text-xs shadow-sm transition active:scale-95"
+              className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/60 hover:border-indigo-400 dark:hover:border-indigo-600 font-bold text-xs shadow-sm transition active:scale-95"
               title="Summarize this 1-to-1 conversation with AI"
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-              <span>AI Summary</span>
+              <span className="hidden sm:inline">AI Summary</span>
             </button>
           )}
 
@@ -208,7 +220,7 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
           <button
             type="button"
             onClick={handleExit}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-800 font-bold text-xs shadow-sm transition active:scale-95"
+            className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-800 font-bold text-xs shadow-sm transition active:scale-95"
             title={isChannel ? 'Exit channel' : 'Exit chat'}
           >
             <LogOut className="w-3.5 h-3.5 rotate-180 text-rose-500" />

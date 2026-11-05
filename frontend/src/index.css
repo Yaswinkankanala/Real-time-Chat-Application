@@ -31,3 +31,47 @@
 code, pre {
   font-family: 'JetBrains Mono', monospace;
 }
+
+/* 3D and Micro-interactions Animations */
+@keyframes float-slow {
+  0%, 100% {
+    transform: translateY(0px) rotateX(0deg) rotateY(0deg);
+  }
+  50% {
+    transform: translateY(-8px) rotateX(4deg) rotateY(3deg);
+  }
+}
+
+@keyframes spin-reverse {
+  from {
+    transform: rotateX(72deg) rotateY(-25deg) rotate(360deg);
+  }
+  to {
+    transform: rotateX(72deg) rotateY(-25deg) rotate(0deg);
+  }
+}
+
+.animate-float-slow {
+  animation: float-slow 6s ease-in-out infinite;
+}
+
+/* Safe areas for mobile devices */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom, 0.75rem);
+}
+
+.pt-safe {
+  padding-top: env(safe-area-inset-top, 0.5rem);
+}
+
+/* Accessibility: respect user preference for reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

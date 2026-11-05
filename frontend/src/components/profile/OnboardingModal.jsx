@@ -224,8 +224,8 @@ export default function OnboardingModal({ isOpen }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-xl overflow-y-auto animate-fade-in select-none">
-      <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl my-6 transition-colors max-h-[92vh] flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-xl overflow-y-auto animate-fade-in select-none">
+      <div className="w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-4 sm:p-8 shadow-2xl my-auto transition-colors max-h-[94dvh] flex flex-col">
         {/* Top Header */}
         <div className="text-center mb-4 shrink-0">
           <div className="inline-flex items-center justify-center mb-2">

@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { api } from '../../services/api';
 import ChatSphereLogo from '../common/ChatSphereLogo';
+import ChatSphere3DHero from '../common/ChatSphere3DHero';
 import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 import {
   Lock,
@@ -175,7 +176,7 @@ export default function LoginModal() {
     setLocalError('');
     setGoogleLoading(true);
     try {
-      await loginWithGoogleAuth();
+      await loginWithGoogleAuth(isSignUp);
     } catch (err) {
       setLocalError(err.message || 'Google Authentication failed. Please try again.');
     } finally {
@@ -184,16 +185,16 @@ export default function LoginModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-xl overflow-y-auto select-none">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-950/85 backdrop-blur-xl overflow-y-auto select-none">
       {/* Decorative background aura */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none animate-pulse-subtle" />
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none animate-pulse-subtle" />
 
-      <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl backdrop-blur-2xl my-6 transition-colors">
-        {/* App Branding */}
-        <div className="text-center mb-6">
-          <div className="inline-flex items-center justify-center mb-3">
-            <ChatSphereLogo size={56} />
+      <div className="relative w-full max-w-md bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl p-5 sm:p-8 shadow-2xl backdrop-blur-2xl my-auto transition-colors max-h-[94dvh] overflow-y-auto">
+        {/* App Branding with 3D Interactive Hero */}
+        <div className="text-center mb-5">
+          <div className="mb-2 flex justify-center">
+            <ChatSphere3DHero size={isSignUp ? 'small' : 'default'} />
           </div>
           <h1 className="text-2xl font-black tracking-tight text-slate-900 dark:text-white">
             ChatSphere

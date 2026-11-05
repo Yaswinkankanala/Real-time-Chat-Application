@@ -134,6 +134,65 @@ const indexes = {
   usernames: new Map()   // normalized username -> userId
 };
 
+// In-flight reservation locks for atomic concurrency protection during simultaneous registration
+const pendingRegistrations = {
+  emails: new Set(),
+  phones: new Set(),
+  usernames: new Set()
+};
+
+/**
+ * Atomically reserve a set of credentials during in-flight registration.
+ * Throws DuplicateKeyError immediately if any credential is taken or pending in another simultaneous request.
+ * Returns an unreserve release callback to clean up on error or completion.
+ */
+function reserveRegistration({ email, phone, username }) {
+  const normEmail = normalizeEmail(email);
+  const canonPhone = canonicalizePhone(phone);
+  const normUser = (username || '').trim().toLowerCase();
+
+  // 1. Check in-memory index or pending in-flight reservation for Email
+  if (normEmail) {
+    if (indexes.emails.has(normEmail) || pendingRegistrations.emails.has(normEmail) || db.users.some((u) => normalizeEmail(u.email) === normEmail)) {
+      throw new DuplicateKeyError(
+        'email',
+        'This email address is already registered. Please log in instead.'
+      );
+    }
+  }
+
+  // 2. Check in-memory index or pending in-flight reservation for Phone
+  if (canonPhone) {
+    if (indexes.phones.has(canonPhone) || pendingRegistrations.phones.has(canonPhone) || db.users.some((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, canonPhone))) {
+      throw new DuplicateKeyError(
+        'mobileNumber',
+        'This contact number is already registered. Please use a different number.'
+      );
+    }
+  }
+
+  // 3. Check in-memory index or pending in-flight reservation for Username
+  if (normUser) {
+    if (indexes.usernames.has(normUser) || pendingRegistrations.usernames.has(normUser) || db.users.some((u) => (u.username || '').trim().toLowerCase() === normUser)) {
+      throw new DuplicateKeyError(
+        'username',
+        'This username is already taken by another user.'
+      );
+    }
+  }
+
+  // Atomically mark pending
+  if (normEmail) pendingRegistrations.emails.add(normEmail);
+  if (canonPhone) pendingRegistrations.phones.add(canonPhone);
+  if (normUser) pendingRegistrations.usernames.add(normUser);
+
+  return function release() {
+    if (normEmail) pendingRegistrations.emails.delete(normEmail);
+    if (canonPhone) pendingRegistrations.phones.delete(canonPhone);
+    if (normUser) pendingRegistrations.usernames.delete(normUser);
+  };
+}
+
 function rebuildIndexes() {
   indexes.emails.clear();
   indexes.phones.clear();
@@ -306,6 +365,8 @@ module.exports = {
   DuplicateKeyError,
   indexes,
   rebuildIndexes,
+  pendingRegistrations,
+  reserveRegistration,
   users: {
     find: (predicate) => (predicate ? db.users.filter(predicate) : db.users),
     findOne: (predicate) => db.users.find(predicate),

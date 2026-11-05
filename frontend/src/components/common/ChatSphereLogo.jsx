@@ -3,14 +3,14 @@ import React from 'react';
 export default function ChatSphereLogo({ size = 36, className = '' }) {
   return (
     <div
-      className={`relative inline-flex items-center justify-center shrink-0 ${className}`}
-      style={{ width: size, height: size }}
+      className={`relative inline-flex items-center justify-center shrink-0 transition-transform duration-300 hover:scale-105 active:scale-95 group ${className}`}
+      style={{ width: size, height: size, perspective: '600px' }}
     >
       <svg
         viewBox="0 0 48 48"
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        className="w-full h-full drop-shadow-md"
+        className="w-full h-full drop-shadow-md transition-transform duration-300 group-hover:rotate-6"
       >
         <defs>
           <linearGradient id="csGradientSphere" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">

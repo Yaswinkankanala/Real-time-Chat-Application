@@ -1,6 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
-const { users, sanitizeUser, generateUniqueCode } = require('../db');
+const {
+  users,
+  sanitizeUser,
+  generateUniqueCode,
+  normalizeEmail,
+  canonicalizePhone,
+  reserveRegistration
+} = require('../db');
 const { signToken, authMiddleware, verifyFirebaseIdToken } = require('../auth');
 const { verifyPhotoStored } = require('../photoValidation');
 
@@ -72,14 +79,14 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ error: 'Username must be at least 3 alphanumeric characters' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = normalizeEmail(email);
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
+    if (!cleanEmail || !emailRegex.test(cleanEmail)) {
       return res.status(400).json({ error: 'Please enter a valid email address' });
     }
 
-    const cleanPhone = mobileNumber.trim();
-    if (!isValidPhoneNumber(cleanPhone)) {
+    const cleanPhone = canonicalizePhone(mobileNumber);
+    if (!cleanPhone || !isValidPhoneNumber(cleanPhone)) {
       return res.status(400).json({ error: 'Please enter a valid contact number.' });
     }
 
@@ -102,65 +109,83 @@ router.post('/register', async (req, res) => {
       });
     }
 
-    // 5. Mandatory Profile Photo Check (if avatar was passed during registration)
-    let validatedAvatar = '';
-    if (avatar && typeof avatar === 'string' && avatar.trim()) {
-      if (!verifyPhotoStored(avatar)) {
-        return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
-      }
-      validatedAvatar = avatar.trim();
+    // Concurrency reservation lock: reserve email, phone, and username atomically
+    let releaseReservation = null;
+    try {
+      releaseReservation = reserveRegistration({
+        email: cleanEmail,
+        phone: cleanPhone,
+        username: cleanUsername
+      });
+    } catch (dupErr) {
+      return res.status(400).json({ error: dupErr.message });
     }
-
-    // 6. Generate secure password hash
-    const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync(password, salt);
-
-    // 7. Generate automatic permanent unique alphanumeric identification code (e.g. CS8K92A)
-    const uniqueCode = generateUniqueCode();
-
-    const cleanInterests = Array.isArray(interests)
-      ? interests.map((i) => String(i).trim()).filter(Boolean)
-      : [];
-
-    const newUser = {
-      id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      uniqueCode,
-      displayName: displayName.trim(),
-      username: cleanUsername,
-      email: cleanEmail,
-      passwordHash,
-      mobileNumber: cleanPhone,
-      gender: gender?.trim() || '',
-      dob: dob?.trim() || '',
-      avatar: validatedAvatar,
-      bio: '',
-      interests: cleanInterests,
-      notificationsEnabled: true,
-      theme: 'dark',
-      profileCompleted: false,
-      status: 'Active on ChatSphere',
-      createdAt: new Date().toISOString()
-    };
-
-    // Check if user immediately completed all 8 mandatory fields
-    newUser.profileCompleted = checkProfileCompleted(newUser);
 
     try {
-      users.create(newUser);
-    } catch (dbErr) {
-      if (dbErr.name === 'DuplicateKeyError') {
-        return res.status(400).json({ error: dbErr.message });
+      // 5. Mandatory Profile Photo Check (if avatar was passed during registration)
+      let validatedAvatar = '';
+      if (avatar && typeof avatar === 'string' && avatar.trim()) {
+        if (!verifyPhotoStored(avatar)) {
+          return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
+        }
+        validatedAvatar = avatar.trim();
       }
-      throw dbErr;
-    }
-    const token = signToken(newUser);
 
-    return res.status(201).json({
-      message: 'Account registered successfully',
-      user: sanitizeUser(newUser, newUser.id),
-      token,
-      isNewUser: !newUser.profileCompleted
-    });
+      // 6. Generate secure password hash
+      const salt = bcrypt.genSaltSync(10);
+      const passwordHash = bcrypt.hashSync(password, salt);
+
+      // 7. Generate automatic permanent unique alphanumeric identification code (e.g. CS8K92A)
+      const uniqueCode = generateUniqueCode();
+
+      const cleanInterests = Array.isArray(interests)
+        ? interests.map((i) => String(i).trim()).filter(Boolean)
+        : [];
+
+      const newUser = {
+        id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        uniqueCode,
+        displayName: displayName.trim(),
+        username: cleanUsername,
+        email: cleanEmail,
+        passwordHash,
+        mobileNumber: cleanPhone,
+        gender: gender?.trim() || '',
+        dob: dob?.trim() || '',
+        avatar: validatedAvatar,
+        bio: '',
+        interests: cleanInterests,
+        notificationsEnabled: true,
+        theme: 'dark',
+        profileCompleted: false,
+        status: 'Active on ChatSphere',
+        createdAt: new Date().toISOString()
+      };
+
+      // Check if user immediately completed all 8 mandatory fields
+      newUser.profileCompleted = checkProfileCompleted(newUser);
+
+      try {
+        users.create(newUser);
+      } catch (dbErr) {
+        if (dbErr.name === 'DuplicateKeyError') {
+          return res.status(400).json({ error: dbErr.message });
+        }
+        throw dbErr;
+      }
+      const token = signToken(newUser);
+
+      return res.status(201).json({
+        message: 'Account registered successfully',
+        user: sanitizeUser(newUser, newUser.id),
+        token,
+        isNewUser: !newUser.profileCompleted
+      });
+    } finally {
+      if (releaseReservation) {
+        releaseReservation();
+      }
+    }
   } catch (err) {
     console.error('Registration error:', err);
     return res.status(500).json({ error: 'Internal server error during registration' });
@@ -236,7 +261,7 @@ router.get('/firebase-config', (req, res) => {
  */
 router.post('/verify', async (req, res) => {
   try {
-    const { idToken, username: requestedUsername, displayName: requestedDisplayName } = req.body;
+    const { idToken, username: requestedUsername, displayName: requestedDisplayName, isSignUp } = req.body;
 
     if (!idToken) {
       return res.status(400).json({ error: 'Firebase ID token is required' });
@@ -249,8 +274,16 @@ router.post('/verify', async (req, res) => {
       return res.status(400).json({ error: 'Verified token must include an email address' });
     }
 
-    const cleanEmail = email.toLowerCase().trim();
+    const cleanEmail = normalizeEmail(email);
     let user = users.findByFirebaseUid(uid) || users.findByEmail(cleanEmail);
+
+    // If request originates from Sign Up tab and user already exists, reject duplicate registration
+    if (isSignUp && user) {
+      return res.status(400).json({
+        error: 'This email address is already registered. Please log in instead.'
+      });
+    }
+
     let isNewUser = false;
 
     if (!user) {

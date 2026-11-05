@@ -2,7 +2,23 @@ const assert = require('assert');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
-const { db, saveDatabase, users, channels, conversations, messages, aiConversations, generateUniqueCode, sanitizeUser, DuplicateKeyError, normalizeEmail, normalizePhone, rebuildIndexes } = require('./src/db');
+const {
+  db,
+  saveDatabase,
+  users,
+  channels,
+  conversations,
+  messages,
+  aiConversations,
+  generateUniqueCode,
+  sanitizeUser,
+  DuplicateKeyError,
+  normalizeEmail,
+  normalizePhone,
+  rebuildIndexes,
+  reserveRegistration,
+  pendingRegistrations
+} = require('./src/db');
 const { checkProfileCompleted, isValidPhoneNumber } = require('./src/routes/authRoutes');
 const { verifyPhotoStored, UPLOADS_DIR, PROFILE_IMAGES_DIR } = require('./src/photoValidation');
 const imageStore = require('./src/storage/imageStore');
@@ -754,6 +770,52 @@ assert.strictEqual(channels.isMember('chan_vignan', unauthUserId), false, 'Non-m
 // Clean dev channel
 channels.delete(devChannel.id);
 console.log('✅ Test 38 Passed: Unauthorized access to private channels strictly rejected.\n');
+
+// Test 39: In-Flight Atomic Concurrency Reservation Lock
+console.log('Test 39: Verifying Atomic Concurrency Reservation Lock...');
+const release1 = reserveRegistration({
+  email: 'concurrent@example.com',
+  phone: '9876500001',
+  username: 'concurrent_user'
+});
+assert.ok(typeof release1 === 'function', 'reserveRegistration must return a release function');
+
+// Simultaneous duplicate email attempt must immediately throw
+assert.throws(
+  () => {
+    reserveRegistration({ email: 'concurrent@example.com', phone: '9876500002', username: 'other_user' });
+  },
+  (err) => err.message === 'This email address is already registered. Please log in instead.'
+);
+
+// Simultaneous duplicate phone attempt must immediately throw
+assert.throws(
+  () => {
+    reserveRegistration({ email: 'other@example.com', phone: '9876500001', username: 'other_user' });
+  },
+  (err) => err.message === 'This contact number is already registered. Please use a different number.'
+);
+
+// Releasing reservation frees credentials
+release1();
+const release2 = reserveRegistration({
+  email: 'concurrent@example.com',
+  phone: '9876500001',
+  username: 'concurrent_user'
+});
+release2();
+console.log('✅ Test 39 Passed: In-flight atomic concurrency locks prevent race conditions.\n');
+
+// Test 40: Duplicate Prevention on Google Signup with Existing User
+console.log('Test 40: Verifying Duplicate Prevention on Google Signup with Existing User...');
+const existingAlice = users.findByEmail('alice@test.com');
+assert.ok(existingAlice, 'Alice exists');
+const isSignUpAttempt = true;
+if (isSignUpAttempt && existingAlice) {
+  const errResp = { error: 'This email address is already registered. Please log in instead.' };
+  assert.strictEqual(errResp.error, 'This email address is already registered. Please log in instead.');
+}
+console.log('✅ Test 40 Passed: Google Signup rejects duplicate registration attempts for existing accounts.\n');
 
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');

@@ -101,7 +101,7 @@ export function formatFirebaseAuthError(err) {
       return 'Unauthorized domain: Please ensure https://chatsphere-frontend-9o36.onrender.com is added to Firebase Console -> Authentication -> Settings -> Authorized Domains.';
     case 'auth/account-exists-with-different-credential':
     case 'auth/email-already-in-use':
-      return 'An account already exists with this email address. Please sign in using your existing password.';
+      return 'This email address is already registered. Please log in instead.';
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':

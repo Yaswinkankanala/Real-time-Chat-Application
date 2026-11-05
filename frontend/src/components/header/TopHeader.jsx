@@ -43,13 +43,13 @@ export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp })
   };
 
   return (
-    <header className="h-16 px-4 sm:px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between select-none z-30 transition-colors shrink-0">
+    <header className="h-16 px-3 sm:px-6 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between select-none z-30 transition-colors shrink-0">
       {/* Left: ChatSphere Logo & Brand */}
-      <div className="flex items-center gap-3">
-        <ChatSphereLogo size={36} />
+      <div className="flex items-center gap-2 sm:gap-3">
+        <ChatSphereLogo size={32} />
         <div>
           <div className="flex items-center gap-1.5">
-            <span className="text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
+            <span className="text-sm sm:text-base font-extrabold tracking-tight text-slate-900 dark:text-white">
               ChatSphere
             </span>
           </div>
@@ -67,14 +67,14 @@ export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp })
       </div>
 
       {/* Center: Prominent User Unique Identification Code & Quick AI Action */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2">
         {user?.uniqueCode && (
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-500/30 shadow-sm transition-all hover:border-indigo-400">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-600 dark:text-indigo-400">
+          <div className="flex items-center gap-1 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-500/30 shadow-sm transition-all hover:border-indigo-400">
+            <div className="flex items-center gap-1 sm:gap-1.5">
+              <span className="hidden sm:inline text-[10px] uppercase font-bold tracking-wider text-indigo-600 dark:text-indigo-400">
                 My Code:
               </span>
-              <span className="font-mono text-sm font-extrabold text-slate-900 dark:text-white tracking-wider">
+              <span className="font-mono text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white tracking-wider">
                 {user.uniqueCode}
               </span>
             </div>

@@ -24,7 +24,7 @@ function MainWorkspace({
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
+    <div className="flex flex-col h-[100dvh] w-screen bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
       {/* Top Navigation Header with Unique Code & Profile Dropdown */}
       <TopHeader
         onOpenProfile={() => setIsProfileOpen(true)}
@@ -33,7 +33,7 @@ function MainWorkspace({
       />
 
       {/* Main Work Area: responsive mobile switching between list and active chat */}
-      <div className="flex-1 flex min-w-0 h-[calc(100vh-4rem)] overflow-hidden">
+      <div className="flex-1 flex min-w-0 h-[calc(100dvh-4rem)] overflow-hidden">
         {/* Left Navigation Sidebar: On mobile, visible when activeTarget is null, hidden when chat is open */}
         <div className={`${activeTarget ? 'hidden md:flex' : 'flex'} w-full md:w-72 h-full shrink-0`}>
           <Sidebar onOpenProfile={() => setIsProfileOpen(true)} />
