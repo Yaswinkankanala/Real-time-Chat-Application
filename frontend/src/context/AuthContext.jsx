@@ -6,7 +6,8 @@ import {
   signInWithFirebaseEmail,
   signUpWithFirebaseEmail,
   sendFirebasePasswordReset,
-  isFirebaseConfigured
+  isFirebaseConfigured,
+  getRedirectResult
 } from '../firebase/config';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 
@@ -56,9 +57,28 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Validate existing token on mount
+  // Validate existing token on mount and handle redirect result
   useEffect(() => {
     async function verifyExistingAuth() {
+      // Check for Firebase redirect sign-in result if present
+      if (auth) {
+        try {
+          const redirectRes = await getRedirectResult(auth);
+          if (redirectRes && redirectRes.user) {
+            const idToken = await redirectRes.user.getIdToken();
+            const res = await api.verifyFirebaseToken(idToken, {
+              displayName: redirectRes.user.displayName,
+              avatar: redirectRes.user.photoURL
+            });
+            handleAuthSuccess(res);
+            setLoading(false);
+            return;
+          }
+        } catch (redirectErr) {
+          console.warn('Firebase redirect error:', redirectErr.message);
+        }
+      }
+
       if (!token) {
         setLoading(false);
         return;
@@ -181,13 +201,22 @@ export const AuthProvider = ({ children }) => {
   };
 
   /**
-   * Google OAuth Login using Firebase (if available)
+   * Google OAuth Login & Registration using Firebase
    */
   const loginWithGoogleAuth = async () => {
     setAuthError(null);
     try {
-      const { idToken, user: gUser } = await signInWithGoogle();
-      const res = await api.verifyFirebaseToken(idToken);
+      const gResult = await signInWithGoogle();
+      if (gResult?.isRedirecting) {
+        return { isRedirecting: true };
+      }
+      if (!gResult?.idToken) {
+        throw new Error('Google sign-in did not return a valid authentication token');
+      }
+      const res = await api.verifyFirebaseToken(gResult.idToken, {
+        displayName: gResult.user?.displayName,
+        avatar: gResult.user?.photoURL
+      });
       handleAuthSuccess(res);
       return res;
     } catch (err) {

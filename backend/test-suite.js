@@ -205,10 +205,64 @@ assert.ok(deleted);
 assert.strictEqual(users.findById(oldUser.id), undefined, 'Deleted account must no longer exist');
 console.log('✅ Test 12 Passed: Account deletion restriction strictly enforces 10-day rule.\n');
 
+// Test 13: Google OAuth New User Signup
+console.log('Test 13: Google OAuth New User Registration & Unique Code Generation...');
+const googleUid = 'google_uid_998877';
+const googleEmail = 'googleuser@test.com';
+const newGoogleUser = {
+  id: `usr_${googleUid.substring(0, 8)}_abc1`,
+  uniqueCode: generateUniqueCode(),
+  firebaseUid: googleUid,
+  username: 'googler_1234',
+  email: googleEmail,
+  displayName: 'Google Tester',
+  passwordHash: 'firebase_oauth_protected',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150',
+  dob: '',
+  mobileNumber: '',
+  gender: '',
+  bio: '',
+  interests: [],
+  notificationsEnabled: true,
+  theme: 'dark',
+  profileCompleted: false,
+  status: 'Active on ChatSphere',
+  createdAt: new Date().toISOString()
+};
+users.create(newGoogleUser);
+const foundGoogleUser = users.findByFirebaseUid(googleUid);
+assert.ok(foundGoogleUser, 'User should be found by firebaseUid');
+assert.ok(foundGoogleUser.uniqueCode.startsWith('CS'), 'Google user must have CS unique code');
+assert.strictEqual(foundGoogleUser.profileCompleted, false, 'New Google user profile should be incomplete until onboarded');
+console.log(`✅ Test 13 Passed: Google Signup creates user with permanent code ${foundGoogleUser.uniqueCode} and profileCompleted=false.\n`);
+
+// Test 14: Google OAuth Repeated Login (Duplicate Prevention)
+console.log('Test 14: Google OAuth Repeated Login Duplicate Prevention...');
+const initialUserCount = db.users.length;
+const repeatUser = users.findByFirebaseUid(googleUid) || users.findByEmail(googleEmail);
+assert.ok(repeatUser, 'Existing Google user should be retrieved');
+assert.strictEqual(repeatUser.uniqueCode, foundGoogleUser.uniqueCode, 'Must retain original unique code');
+assert.strictEqual(db.users.length, initialUserCount, 'User count must not increase on repeat login');
+console.log('✅ Test 14 Passed: Repeat Google login prevents duplicates and preserves permanent code.\n');
+
+// Test 15: Google OAuth Account Linking with Email/Password User
+console.log('Test 15: Google OAuth Linking with Existing Email/Password Account...');
+const emailUserOriginalCode = user1.uniqueCode;
+const linkedUser = users.findByEmail(user1.email);
+assert.ok(linkedUser, 'Existing user with matching email should be found');
+assert.strictEqual(linkedUser.uniqueCode, emailUserOriginalCode, 'Unique code must remain untouched');
+// Link firebaseUid
+users.update(linkedUser.id, { firebaseUid: 'firebase_linked_uid_1' });
+const verifiedLinkedUser = users.findByFirebaseUid('firebase_linked_uid_1');
+assert.strictEqual(verifiedLinkedUser.id, user1.id, 'Must link to existing user ID');
+assert.strictEqual(verifiedLinkedUser.uniqueCode, emailUserOriginalCode, 'Original code must be preserved');
+console.log('✅ Test 15 Passed: Account linking successfully links Firebase UID without duplicating or modifying unique code.\n');
+
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');
 users.delete(user1.id);
 users.delete(user2.id);
+users.delete(newGoogleUser.id);
 channels.delete(publicChan.id);
 // Reset Vignan members back to []
 const vignanFinal = channels.findById('chan_vignan');

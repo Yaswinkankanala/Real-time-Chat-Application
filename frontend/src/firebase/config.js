@@ -3,6 +3,8 @@ import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
@@ -25,12 +27,12 @@ const getStoredConfig = () => {
 const customConfig = getStoredConfig();
 
 export let firebaseConfig = customConfig || {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyDemoPlaceholderChatSphereKey2026",
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "chatsphere-app.firebaseapp.com",
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "chatsphere-app",
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "chatsphere-app.appspot.com",
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "102938475610",
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:102938475610:web:1234567890abcdef"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || "AIzaSyC72CgTdkJHxyskLAIN1urxBY_8_Gi0qD8",
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || "chatsphere-app-ebc72.firebaseapp.com",
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || "chatsphere-app-ebc72",
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || "chatsphere-app-ebc72.firebasestorage.app",
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || "933541693269",
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || "1:933541693269:web:c1b04d110624b55d95d1dc"
 };
 
 export const isFirebaseConfigured = () => {
@@ -82,21 +84,24 @@ if (typeof window !== 'undefined' && !isFirebaseConfigured()) {
     });
 }
 
-export { auth, googleProvider, onAuthStateChanged, signOut };
+export { auth, googleProvider, onAuthStateChanged, signOut, getRedirectResult };
 
 /**
  * Friendly error translator for Firebase Auth exceptions
  */
 export function formatFirebaseAuthError(err) {
-  const code = err.code || '';
+  const code = err?.code || '';
   switch (code) {
     case 'auth/popup-closed-by-user':
     case 'auth/cancelled-popup-request':
-      return 'Sign-in popup was closed before completing. Please try again.';
+      return 'Google sign-in was cancelled before completing. Please try again.';
+    case 'auth/popup-blocked':
+      return 'Sign-in popup was blocked by your browser. Please allow popups for this site and try again.';
     case 'auth/unauthorized-domain':
-      return 'Unauthorized domain: Add this domain (or localhost) in Firebase Console -> Authentication -> Settings -> Authorized Domains.';
+      return 'Unauthorized domain: Please ensure https://chatsphere-frontend-9o36.onrender.com is added to Firebase Console -> Authentication -> Settings -> Authorized Domains.';
+    case 'auth/account-exists-with-different-credential':
     case 'auth/email-already-in-use':
-      return 'An account already exists with this email address. Please sign in instead.';
+      return 'An account already exists with this email address. Please sign in using your existing password.';
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
@@ -108,7 +113,7 @@ export function formatFirebaseAuthError(err) {
     case 'auth/too-many-requests':
       return 'Access temporarily blocked due to many failed attempts. Try again later.';
     case 'auth/operation-not-allowed':
-      return 'This sign-in provider is not enabled in Firebase Console. Please enable Email/Password or Google.';
+      return 'Google sign-in is not enabled in Firebase Console. Please enable Google provider under Authentication -> Sign-in method.';
     case 'auth/network-request-failed':
       return 'Network connection failed. Please check your internet connection.';
     default:
@@ -120,18 +125,8 @@ export function formatFirebaseAuthError(err) {
  * Authentic Firebase Google Popup Sign-In
  */
 export async function signInWithGoogle() {
-  if (!isFirebaseConfigured()) {
-    console.info('Using local preview Google OAuth profile. Enter Firebase credentials in Settings to link live Firebase Console.');
-    return {
-      isSimulated: true,
-      idToken: 'simulated_dev_token_' + Math.random().toString(36).substring(2, 9),
-      user: {
-        uid: 'google_dev_' + Math.random().toString(36).substring(2, 8),
-        email: 'developer.google@chatsphere.io',
-        displayName: 'Google Dev User',
-        photoURL: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150'
-      }
-    };
+  if (!auth || !googleProvider) {
+    initializeFirebase();
   }
 
   try {
@@ -139,16 +134,24 @@ export async function signInWithGoogle() {
     const user = result.user;
     const idToken = await user.getIdToken();
     return {
-      isSimulated: false,
       idToken,
       user: {
         uid: user.uid,
         email: user.email,
         displayName: user.displayName || user.email?.split('@')[0],
-        photoURL: user.photoURL || `https://api.dicebear.com/7.x/bottts/svg?seed=${user.email}`
+        photoURL: user.photoURL || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(user.email || 'User')}`
       }
     };
   } catch (err) {
+    if (err?.code === 'auth/popup-blocked') {
+      console.warn('Popup blocked, attempting redirect sign-in...');
+      try {
+        await signInWithRedirect(auth, googleProvider);
+        return { isRedirecting: true };
+      } catch (redirectErr) {
+        throw new Error(formatFirebaseAuthError(redirectErr));
+      }
+    }
     console.error('Google Sign-In Error:', err);
     throw new Error(formatFirebaseAuthError(err));
   }

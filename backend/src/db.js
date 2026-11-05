@@ -191,6 +191,10 @@ module.exports = {
       if (!email) return null;
       return db.users.find((u) => u.email?.toLowerCase() === email.trim().toLowerCase());
     },
+    findByFirebaseUid: (uid) => {
+      if (!uid) return null;
+      return db.users.find((u) => u.firebaseUid === uid);
+    },
     findByUsername: (username) => {
       if (!username) return null;
       return db.users.find((u) => u.username?.toLowerCase() === username.trim().toLowerCase());

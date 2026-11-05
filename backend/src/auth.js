@@ -7,7 +7,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'chatsphere-super-secret-key-2026';
 const JWT_EXPIRES_IN = '7d';
 
 let firebaseAdminInitialized = false;
-let firebaseProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || null;
+let firebaseProjectId = process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'chatsphere-app-ebc72';
 
 // Initialize Firebase Admin SDK if credentials or project ID exist
 try {

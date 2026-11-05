@@ -196,6 +196,22 @@ router.post('/login', async (req, res) => {
 });
 
 /**
+ * GET /api/auth/firebase-config
+ * Public Firebase web client credentials for client authentication
+ */
+router.get('/firebase-config', (req, res) => {
+  const config = {
+    apiKey: process.env.VITE_FIREBASE_API_KEY || 'AIzaSyC72CgTdkJHxyskLAIN1urxBY_8_Gi0qD8',
+    authDomain: process.env.VITE_FIREBASE_AUTH_DOMAIN || 'chatsphere-app-ebc72.firebaseapp.com',
+    projectId: process.env.FIREBASE_PROJECT_ID || process.env.VITE_FIREBASE_PROJECT_ID || 'chatsphere-app-ebc72',
+    storageBucket: process.env.VITE_FIREBASE_STORAGE_BUCKET || 'chatsphere-app-ebc72.firebasestorage.app',
+    messagingSenderId: process.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '933541693269',
+    appId: process.env.VITE_FIREBASE_APP_ID || '1:933541693269:web:c1b04d110624b55d95d1dc'
+  };
+  return res.json({ configured: true, config });
+});
+
+/**
  * POST /api/auth/verify
  * Firebase OAuth Verification endpoint (optional Google OAuth fallback)
  */
@@ -256,8 +272,15 @@ router.post('/verify', async (req, res) => {
 
       users.create(user);
     } else {
+      const updates = {};
+      if (!user.firebaseUid) {
+        updates.firebaseUid = uid;
+      }
       if (!user.uniqueCode) {
-        user = users.update(user.id, { uniqueCode: generateUniqueCode() }) || user;
+        updates.uniqueCode = generateUniqueCode();
+      }
+      if (Object.keys(updates).length > 0) {
+        user = users.update(user.id, updates) || user;
       }
       isNewUser = !user.profileCompleted;
     }
