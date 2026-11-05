@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   Hash,
   Lock,
@@ -9,13 +9,17 @@ import {
   AlertCircle,
   Clock,
   WifiOff,
-  Sparkles
+  Sparkles,
+  LogOut,
+  Bot,
+  Compass
 } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import MessageItem from './MessageItem';
 import MessageInput from './MessageInput';
 import FindPeopleModal from './FindPeopleModal';
 import AiChatSummaryModal from './AiChatSummaryModal';
+import AiAgentView from '../ai/AiAgentView';
 import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
@@ -26,11 +30,13 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
     typingUsers,
     onlineUserIds,
     offlineNotice,
-    setOfflineNotice
+    setOfflineNotice,
+    selectTarget,
+    exitActiveTarget
   } = useSocket();
 
-  const [isFindPeopleOpen, setIsFindPeopleOpen] = React.useState(false);
-  const [isSummaryOpen, setIsSummaryOpen] = React.useState(false);
+  const [isFindPeopleOpen, setIsFindPeopleOpen] = useState(false);
+  const [isSummaryOpen, setIsSummaryOpen] = useState(false);
   const scrollRef = useRef(null);
 
   // Auto-scroll to bottom on new messages
@@ -40,27 +46,70 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
     }
   }, [messages, typingUsers]);
 
-  // Empty state when no chat is active
+  // Close AI summary modal whenever target conversation changes
+  useEffect(() => {
+    setIsSummaryOpen(false);
+  }, [activeTarget?.id, activeTarget?.type]);
+
+  // Handle Exit Button click for opened chat/channel
+  const handleExit = () => {
+    setIsSummaryOpen(false);
+    exitActiveTarget();
+  };
+
+  // Render dedicated AI Agent Interface when activeTarget is 'ai'
+  if (activeTarget?.type === 'ai') {
+    return <AiAgentView onExit={handleExit} />;
+  }
+
+  // Dashboard / Empty state when no chat or channel is currently open
   if (!activeTarget) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-slate-950/60 select-none transition-colors">
+      <div className="flex-1 flex flex-col items-center justify-center p-6 sm:p-8 text-center bg-white dark:bg-slate-950/60 select-none transition-colors">
         <div className="w-16 h-16 rounded-3xl bg-indigo-50 dark:bg-indigo-600/10 border border-indigo-100 dark:border-indigo-500/20 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-4 animate-bounce-short">
           <MessageSquare className="w-8 h-8" />
         </div>
         <h2 className="text-xl font-extrabold text-slate-900 dark:text-white mb-2">
-          No conversations yet
+          ChatSphere Dashboard
         </h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 max-w-sm mb-6 leading-relaxed">
-          Find your friends using their unique identification code or phone number, or join the Vignan channel to start communicating.
+          Select a conversation from the sidebar, search for friends using their Unique Code or Phone, or ask ChatSphere AI.
         </p>
-        <button
-          type="button"
-          onClick={() => setIsFindPeopleOpen(true)}
-          className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-lg shadow-indigo-600/30 transition active:scale-95"
-        >
-          <UserPlus className="w-4 h-4" />
-          <span>Find Friends</span>
-        </button>
+
+        {/* Quick Action Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md w-full mb-6 text-left">
+          <button
+            type="button"
+            onClick={() => setIsFindPeopleOpen(true)}
+            className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-400 dark:hover:border-indigo-600 transition flex items-center gap-3 group active:scale-98 shadow-sm"
+          >
+            <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+              <UserPlus className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                Find Friends
+              </p>
+              <p className="text-[10px] text-slate-400">Search by code or phone</p>
+            </div>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => selectTarget('ai', 'assistant', { name: 'ChatSphere AI Assistant' })}
+            className="p-3.5 rounded-2xl bg-gradient-to-r from-indigo-50/70 to-purple-50/70 dark:from-indigo-950/30 dark:to-purple-950/30 border border-indigo-200/80 dark:border-indigo-800/60 hover:border-indigo-400 dark:hover:border-indigo-500 transition flex items-center gap-3 group active:scale-98 shadow-sm"
+          >
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm shadow-indigo-500/20">
+              <Sparkles className="w-4 h-4 animate-pulse-subtle" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-indigo-900 dark:text-indigo-200 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                AI Assistant
+              </p>
+              <p className="text-[10px] text-indigo-600/80 dark:text-indigo-400">Code, ideas, & messages</p>
+            </div>
+          </button>
+        </div>
 
         <FindPeopleModal
           isOpen={isFindPeopleOpen}
@@ -128,7 +177,7 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
 
         {/* Header Right Actions */}
         <div className="flex items-center gap-2">
-          {/* AI Chat Summary: Exclusively for 1-to-1 Personal Conversations */}
+          {/* AI Chat Summary: Exclusively for 1-to-1 Personal Conversations (FEATURE 2) */}
           {isDirect && (
             <button
               type="button"
@@ -137,10 +186,11 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
               title="Summarize this 1-to-1 conversation with AI"
             >
               <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
-              <span className="hidden sm:inline">Summarize Conversation</span>
+              <span>AI Summary</span>
             </button>
           )}
 
+          {/* Toggle Details Sidebar */}
           <button
             type="button"
             onClick={onToggleRightSidebar}
@@ -152,6 +202,17 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
             title="Toggle details sidebar"
           >
             <PanelRight className="w-4 h-4" />
+          </button>
+
+          {/* EXIT BUTTON: Available for both Personal 1-to-1 Chats and Channels (FEATURE 6) */}
+          <button
+            type="button"
+            onClick={handleExit}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-rose-50 dark:bg-slate-800 dark:hover:bg-rose-950/40 text-slate-700 hover:text-rose-600 dark:text-slate-300 dark:hover:text-rose-400 border border-slate-200 dark:border-slate-700 hover:border-rose-200 dark:hover:border-rose-800 font-bold text-xs shadow-sm transition active:scale-95"
+            title={isChannel ? 'Exit channel' : 'Exit chat'}
+          >
+            <LogOut className="w-3.5 h-3.5 rotate-180 text-rose-500" />
+            <span>Exit</span>
           </button>
         </div>
       </div>

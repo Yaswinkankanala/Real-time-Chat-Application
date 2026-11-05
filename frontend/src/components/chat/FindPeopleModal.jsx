@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Search, X, MessageSquare, Phone, Key, UserCheck, Check, AlertCircle } from 'lucide-react';
 import { api } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function FindPeopleModal({ isOpen, onClose }) {
+  const { user: currentUser } = useAuth();
   const { selectTarget, onlineUserIds } = useSocket();
   const [query, setQuery] = useState('');
   const [usersList, setUsersList] = useState([]);
@@ -47,9 +49,18 @@ export default function FindPeopleModal({ isOpen, onClose }) {
   };
 
   const handleStartChat = async (targetUser) => {
+    if (!targetUser || targetUser.id === currentUser?.id) return;
     try {
       await api.createConversation(targetUser.id);
       selectTarget('direct', targetUser.id, targetUser);
+      // Immediately notify application & sidebar to update conversation list
+      try {
+        window.dispatchEvent(
+          new CustomEvent('chatsphere:conversation-updated', {
+            detail: { targetUserId: targetUser.id }
+          })
+        );
+      } catch (e) {}
       onClose();
     } catch (err) {
       console.error('Failed to start conversation:', err);
@@ -174,14 +185,21 @@ export default function FindPeopleModal({ isOpen, onClose }) {
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleStartChat(u)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md shadow-indigo-600/20 transition active:scale-95 shrink-0 ml-2"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5" />
-                    <span>Chat</span>
-                  </button>
+                  {u.id === currentUser?.id ? (
+                    <span className="px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-500 font-bold text-xs shrink-0 ml-2">
+                      You
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleStartChat(u)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-md shadow-indigo-600/20 transition active:scale-95 shrink-0 ml-2"
+                      title={`Message ${u.displayName}`}
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>Message</span>
+                    </button>
+                  )}
                 </div>
               );
             })

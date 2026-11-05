@@ -42,6 +42,18 @@ function setupSocket(io) {
     // Join personal user room for direct messages
     socket.join(`user:${userId}`);
 
+    // Automatically join Socket.IO rooms for all channels user is a member/owner of
+    try {
+      const userChannels = channels.find((c) => {
+        return c.ownerId === userId || (Array.isArray(c.members) && c.members.includes(userId));
+      });
+      userChannels.forEach((c) => {
+        socket.join(`channel:${c.id}`);
+      });
+    } catch (chanErr) {
+      console.error('Error auto-joining user channel rooms:', chanErr);
+    }
+
     // Broadcast updated online users list
     io.emit('presence:list', Array.from(onlineUsers.keys()));
 
@@ -59,29 +71,47 @@ function setupSocket(io) {
     }
 
     // Join channel room (validates membership for private channels!)
-    socket.on('channel:join', (channelId, callback) => {
+    const handleJoinChannel = (channelId, callback) => {
+      if (!channelId) {
+        if (callback) callback({ error: 'channelId is required' });
+        return;
+      }
+
       const channel = channels.findById(channelId);
       if (!channel) {
         if (callback) callback({ error: 'Channel not found' });
         return;
       }
 
-      if (channel.isPrivate && !channels.isMember(channelId, userId)) {
+      const isMember = channel.ownerId === userId || (Array.isArray(channel.members) && channel.members.includes(userId));
+      if (channel.isPrivate && !isMember) {
         if (callback) callback({ error: 'Access denied: Passcode required to join this channel' });
         return;
       }
 
+      if (!isMember) {
+        channels.addMember(channelId, userId);
+      }
+
       socket.join(`channel:${channelId}`);
-      if (callback) callback({ status: 'ok' });
-    });
+      if (callback) callback({ status: 'ok', channelId });
+    };
+
+    socket.on('channel:join', handleJoinChannel);
+    socket.on('join_channel', handleJoinChannel);
 
     // Leave channel room
-    socket.on('channel:leave', (channelId) => {
-      socket.leave(`channel:${channelId}`);
-    });
+    const handleLeaveChannel = (channelId) => {
+      if (channelId) {
+        socket.leave(`channel:${channelId}`);
+      }
+    };
+
+    socket.on('channel:leave', handleLeaveChannel);
+    socket.on('leave_channel', handleLeaveChannel);
 
     // Send a message (Channel or Direct)
-    socket.on('message:send', async (data, callback) => {
+    const handleSendMessage = async (data, callback) => {
       try {
         const { channelId, recipientId, content, attachment } = data;
 
@@ -90,57 +120,106 @@ function setupSocket(io) {
           return;
         }
 
-        // Validate channel permissions if channel message
+        // 1. Channel message handling
         if (channelId) {
           const channel = channels.findById(channelId);
           if (!channel) {
             if (callback) callback({ error: 'Channel not found' });
             return;
           }
-          if (channel.isPrivate && !channels.isMember(channelId, userId)) {
+
+          const isMember = channel.ownerId === userId || (Array.isArray(channel.members) && channel.members.includes(userId));
+          if (channel.isPrivate && !isMember) {
             if (callback) callback({ error: 'Access denied: Passcode required to view or message in this channel' });
             return;
           }
+
+          if (!isMember) {
+            channels.addMember(channelId, userId);
+          }
+
+          socket.join(`channel:${channelId}`);
+
+          const cleanContent = content ? content.trim() : '';
+
+          const newMsg = {
+            id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            channelId,
+            conversationId: null,
+            recipientId: null,
+            senderId: userId,
+            content: cleanContent,
+            attachment: attachment || null,
+            status: 'sent',
+            readBy: [userId],
+            reactions: {},
+            createdAt: new Date().toISOString()
+          };
+
+          messages.create(newMsg);
+          const enriched = enrichMessage(newMsg);
+
+          // Broadcast to all sockets in the channel room
+          io.to(`channel:${channelId}`).emit('message:new', enriched);
+          io.to(`channel:${channelId}`).emit('receive_channel_message', enriched);
+
+          // Guarantee sender receipt via personal room
+          io.to(`user:${userId}`).emit('message:new', enriched);
+          io.to(`user:${userId}`).emit('receive_channel_message', enriched);
+
+          if (callback) {
+            callback({
+              status: 'ok',
+              message: enriched
+            });
+          }
+          return;
         }
 
+        // 2. Direct 1-to-1 message handling
         let conversationId = null;
         let isRecipientOffline = false;
 
         if (recipientId) {
+          if (recipientId === userId) {
+            if (callback) callback({ error: 'Cannot send a message to yourself' });
+            return;
+          }
+
+          const recipient = users.findById(recipientId);
+          if (!recipient) {
+            if (callback) callback({ error: 'Recipient user does not exist' });
+            return;
+          }
+
           const conv = conversations.findOrCreate(userId, recipientId);
           conversationId = conv.id;
 
           // Check if recipient is online
           const recipientSockets = onlineUsers.get(recipientId);
           isRecipientOffline = !recipientSockets || recipientSockets.size === 0;
-        }
 
-        const cleanContent = content ? content.trim() : '';
+          const cleanContent = content ? content.trim() : '';
 
-        const newMsg = {
-          id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-          channelId: channelId || null,
-          conversationId,
-          recipientId: recipientId || null,
-          senderId: userId,
-          content: cleanContent,
-          attachment: attachment || null,
-          status: isRecipientOffline ? 'sent' : 'delivered',
-          readBy: [userId],
-          reactions: {},
-          createdAt: new Date().toISOString()
-        };
+          const newMsg = {
+            id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+            channelId: null,
+            conversationId,
+            recipientId,
+            senderId: userId,
+            content: cleanContent,
+            attachment: attachment || null,
+            status: isRecipientOffline ? 'sent' : 'delivered',
+            readBy: [userId],
+            reactions: {},
+            createdAt: new Date().toISOString()
+          };
 
-        messages.create(newMsg);
-        if (conversationId) {
+          messages.create(newMsg);
           conversations.update(conversationId, { lastMessage: newMsg });
-        }
 
-        const enriched = enrichMessage(newMsg);
+          const enriched = enrichMessage(newMsg);
 
-        if (channelId) {
-          io.to(`channel:${channelId}`).emit('message:new', enriched);
-        } else if (recipientId) {
           // Emit to sender socket
           io.to(`user:${userId}`).emit('message:new', enriched);
 
@@ -148,20 +227,26 @@ function setupSocket(io) {
           if (!isRecipientOffline) {
             io.to(`user:${recipientId}`).emit('message:new', enriched);
           }
+
+          if (callback) {
+            callback({
+              status: 'ok',
+              message: enriched,
+              isRecipientOffline
+            });
+          }
+          return;
         }
 
-        if (callback) {
-          callback({
-            status: 'ok',
-            message: enriched,
-            isRecipientOffline
-          });
-        }
+        if (callback) callback({ error: 'Either channelId or recipientId must be provided' });
       } catch (err) {
         console.error('Socket message:send error:', err);
         if (callback) callback({ error: 'Failed to send message: ' + err.message });
       }
-    });
+    };
+
+    socket.on('message:send', handleSendMessage);
+    socket.on('send_channel_message', handleSendMessage);
 
     // Message reaction
     socket.on('message:react', (data) => {

@@ -272,3 +272,4 @@ The **ChatSphere Real-Time Chat Application** was successfully designed, develop
 **Registration Number:** 241FA04B99  
 **GitHub Repository:** https://github.com/Yaswinkankanala/Real-time-Chat-Application  
 **Live Application URL:** https://chatsphere-frontend-9o36.onrender.com  
+

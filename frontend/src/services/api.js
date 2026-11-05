@@ -162,6 +162,34 @@ export const api = {
       method: 'POST'
     }),
 
+  summarizeChat: (payload) =>
+    request('/ai/summarize-chat', {
+      method: 'POST',
+      body: payload
+    }),
+
+  // AI Agent Conversations & Chat
+  sendAiMessage: (message, conversationId) =>
+    request('/ai/chat', {
+      method: 'POST',
+      body: { message, conversationId }
+    }),
+
+  getAiConversations: () => request('/ai/conversations'),
+
+  createAiConversation: (title) =>
+    request('/ai/conversations', {
+      method: 'POST',
+      body: { title }
+    }),
+
+  getAiConversationById: (id) => request(`/ai/conversations/${id}`),
+
+  deleteAiConversation: (id) =>
+    request(`/ai/conversations/${id}`, {
+      method: 'DELETE'
+    }),
+
   // Channels
   getChannels: () => request('/channels'),
 
@@ -183,6 +211,12 @@ export const api = {
     }),
 
   getChannelMessages: (channelId) => request(`/channels/${channelId}/messages`),
+
+  sendChannelMessage: (channelId, payload) =>
+    request(`/channels/${channelId}/messages`, {
+      method: 'POST',
+      body: typeof payload === 'string' ? { content: payload } : payload
+    }),
 
   getChannelDetails: (channelId) => request(`/channels/${channelId}`),
 

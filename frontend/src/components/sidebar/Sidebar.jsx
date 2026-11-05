@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Hash,
   Plus,
@@ -9,7 +9,8 @@ import {
   Key,
   UserPlus,
   MessageSquare,
-  Compass
+  Compass,
+  Sparkles
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
@@ -34,6 +35,7 @@ export default function Sidebar({ onOpenProfile }) {
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
   const [isExploreChannelsOpen, setIsExploreChannelsOpen] = useState(false);
   const [isFindPeopleOpen, setIsFindPeopleOpen] = useState(false);
+  const hasAutoSelectedRef = useRef(false);
 
   // Load channels and conversations from database
   const loadSidebarData = async () => {
@@ -47,8 +49,9 @@ export default function Sidebar({ onOpenProfile }) {
       setChannels(fetchedChannels);
       setConversations(fetchedConversations);
 
-      // Only select if user has joined channels or active conversations (never auto-select unjoined Vignan!)
-      if (!activeTarget) {
+      // Only auto-select once on initial mount if not already selected (never after user clicks Exit!)
+      if (!activeTarget && !hasAutoSelectedRef.current) {
+        hasAutoSelectedRef.current = true;
         const joined = fetchedChannels.filter((c) => c.isMember);
         if (joined.length > 0) {
           selectTarget('channel', joined[0].id, joined[0]);
@@ -64,6 +67,15 @@ export default function Sidebar({ onOpenProfile }) {
 
   useEffect(() => {
     loadSidebarData();
+
+    const handleUpdate = () => {
+      loadSidebarData();
+    };
+
+    window.addEventListener('chatsphere:conversation-updated', handleUpdate);
+    return () => {
+      window.removeEventListener('chatsphere:conversation-updated', handleUpdate);
+    };
   }, []);
 
   const handleChannelCreated = (newChan) => {
@@ -95,7 +107,7 @@ export default function Sidebar({ onOpenProfile }) {
   });
 
   return (
-    <aside className="w-72 bg-slate-50 dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col h-full shrink-0 select-none transition-colors">
+    <aside className="w-full md:w-72 bg-slate-50 dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col h-full shrink-0 select-none transition-colors">
       {/* Search Input & Find People Action */}
       <div className="p-3 border-b border-slate-200/80 dark:border-slate-800/80 space-y-2">
         <div className="relative">
@@ -120,7 +132,53 @@ export default function Sidebar({ onOpenProfile }) {
       </div>
 
       {/* Main navigation lists */}
-      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-5">
+      <div className="flex-1 overflow-y-auto px-2 py-3 space-y-4">
+        {/* ChatSphere AI Assistant Navigation Item */}
+        <div>
+          <button
+            type="button"
+            onClick={() => selectTarget('ai', 'assistant', { name: 'ChatSphere AI Assistant' })}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-2xl transition shadow-sm active:scale-98 ${
+              activeTarget?.type === 'ai'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-bold shadow-indigo-500/25'
+                : 'bg-gradient-to-r from-indigo-50/80 to-purple-50/80 hover:from-indigo-100 hover:to-purple-100 dark:from-indigo-950/40 dark:to-purple-950/40 dark:hover:from-indigo-900/40 dark:hover:to-purple-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/80 dark:border-indigo-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2.5">
+              <div
+                className={`w-6 h-6 rounded-lg flex items-center justify-center ${
+                  activeTarget?.type === 'ai'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-indigo-600 text-white shadow-sm'
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5 animate-pulse-subtle" />
+              </div>
+              <div className="text-left">
+                <span className="text-xs font-bold block leading-tight">
+                  AI Assistant
+                </span>
+                <span
+                  className={`text-[10px] block leading-tight ${
+                    activeTarget?.type === 'ai' ? 'text-white/80' : 'text-indigo-500 dark:text-indigo-400'
+                  }`}
+                >
+                  Code, Ideas & Chat
+                </span>
+              </div>
+            </div>
+            <span
+              className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded-md ${
+                activeTarget?.type === 'ai'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300'
+              }`}
+            >
+              Nova AI
+            </span>
+          </button>
+        </div>
+
         {/* Channels Section */}
         <div>
           <div className="flex items-center justify-between px-2 mb-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">

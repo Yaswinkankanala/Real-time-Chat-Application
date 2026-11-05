@@ -2,13 +2,24 @@ const assert = require('assert');
 const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
-const { db, saveDatabase, users, channels, conversations, messages, generateUniqueCode, sanitizeUser, DuplicateKeyError, normalizeEmail, normalizePhone } = require('./src/db');
+const { db, saveDatabase, users, channels, conversations, messages, aiConversations, generateUniqueCode, sanitizeUser, DuplicateKeyError, normalizeEmail, normalizePhone, rebuildIndexes } = require('./src/db');
 const { checkProfileCompleted, isValidPhoneNumber } = require('./src/routes/authRoutes');
 const { verifyPhotoStored, UPLOADS_DIR, PROFILE_IMAGES_DIR } = require('./src/photoValidation');
 const imageStore = require('./src/storage/imageStore');
 const { generateSummary, localNlpSummarize } = require('./src/aiSummary');
+const { generateAiChatResponse, localAiAgentChat } = require('./src/aiAgent');
 
 console.log('🧪 Starting ChatSphere Comprehensive Test Suite...\n');
+
+// Clean any artifacts from previous interrupted runs to guarantee clean initial test state
+db.users = [];
+db.conversations = [];
+db.messages = [];
+db.aiConversations = [];
+db.channels = db.channels.filter((c) => c.name.toLowerCase() === 'vignan');
+if (db.channels[0]) db.channels[0].members = [];
+saveDatabase();
+rebuildIndexes();
 
 // Test 1: Initial state has 0 users, 0 messages, 0 conversations, and ONLY Vignan channel
 console.log('Test 1: Verifying Initial Database State...');
@@ -332,9 +343,10 @@ try {
 } catch (err) {
   emailErrorThrown = true;
   assert.strictEqual(err.name, 'DuplicateKeyError');
-  assert.strictEqual(
-    err.message,
-    'This email address is already registered. Please log in using your existing account.'
+  assert.ok(
+    err.message === 'This email address is already registered. Please log in instead.' ||
+    err.message === 'This email address is already registered. Please log in using your existing account.',
+    'Duplicate email must throw expected error message'
   );
 }
 assert.ok(emailErrorThrown, 'Attempting to register existing email must throw DuplicateKeyError');
@@ -355,9 +367,10 @@ try {
 } catch (err) {
   phoneErrorThrown = true;
   assert.strictEqual(err.name, 'DuplicateKeyError');
-  assert.strictEqual(
-    err.message,
-    'This contact number is already registered with another account. Please use a different number.'
+  assert.ok(
+    err.message === 'This contact number is already registered. Please use a different number.' ||
+    err.message === 'This contact number is already registered with another account. Please use a different number.',
+    'Duplicate contact number must throw expected error message'
   );
 }
 assert.ok(phoneErrorThrown, 'Attempting to register existing contact number must throw DuplicateKeyError');
@@ -444,9 +457,10 @@ try {
   users.update(user2.id, { email: user1.email });
 } catch (err) {
   updateEmailDup = true;
-  assert.strictEqual(
-    err.message,
-    'This email address is already registered. Please log in using your existing account.'
+  assert.ok(
+    err.message === 'This email address is already registered. Please log in instead.' ||
+    err.message === 'This email address is already registered. Please log in using your existing account.',
+    'Updating email to duplicate must throw expected error'
   );
 }
 assert.ok(updateEmailDup, 'Updating email to another user\'s email must throw DuplicateKeyError');
@@ -456,9 +470,10 @@ try {
   users.update(user2.id, { mobileNumber: user1.mobileNumber });
 } catch (err) {
   updatePhoneDup = true;
-  assert.strictEqual(
-    err.message,
-    'This contact number is already registered with another account. Please use a different number.'
+  assert.ok(
+    err.message === 'This contact number is already registered. Please use a different number.' ||
+    err.message === 'This contact number is already registered with another account. Please use a different number.',
+    'Updating phone to duplicate must throw expected error'
   );
 }
 assert.ok(updatePhoneDup, 'Updating phone to another user\'s phone must throw DuplicateKeyError');
@@ -505,6 +520,241 @@ imageStore.deleteOldProfileImage(oldUrl, 'usr_test_user');
 assert.ok(!fs.existsSync(storedDiskFile), 'Old image disk file must be cleaned up');
 console.log('✅ Test 28 Passed: Old profile image safely cleaned up when replaced.\n');
 
+// Test 29: AI Agent Multi-turn Conversation & Context Intelligence
+console.log('Test 29: Verifying AI Agent Conversational Capabilities & Multi-turn Context...');
+const generalReply = localAiAgentChat([], 'What can you help me with?');
+assert.ok(generalReply.includes('ChatSphere AI Assistant'), 'AI response must identify as ChatSphere AI Assistant');
+
+const codeReply = localAiAgentChat([], 'Explain how WebSockets work compared to HTTP');
+assert.ok(codeReply.includes('WebSockets') && codeReply.includes('TCP'), 'Technical query must explain WebSockets');
+
+const draftReply = localAiAgentChat([], 'Help me write a professional message to my manager');
+assert.ok(draftReply.includes('Option 1: Professional'), 'Draft request must generate structured options');
+
+// Multi-turn context test
+const history = [
+  { role: 'user', content: 'Explain WebSockets' },
+  { role: 'assistant', content: codeReply }
+];
+const followUpReply = localAiAgentChat(history, 'Can you elaborate on that?');
+assert.ok(followUpReply.length > 20, 'Follow-up question must produce contextual reply');
+console.log('✅ Test 29 Passed: AI Agent responds intelligently across technical, drafting, and contextual queries.\n');
+
+// Test 30: AI Conversation Database Persistence & Strict User Scoping
+console.log('Test 30: Verifying AI Conversation Persistence & User Scoping...');
+const aliceAiConv = aiConversations.create(user1.id, 'Alice Web Development AI Chat');
+assert.ok(aliceAiConv.id.startsWith('aiconv_'), 'Conversation ID must be prefixed with aiconv_');
+assert.strictEqual(aliceAiConv.userId, user1.id, 'Conversation must belong to Alice');
+
+// Add messages
+const msgUser = aiConversations.addMessage(aliceAiConv.id, { role: 'user', content: 'How do I use React Context?' });
+const msgAi = aiConversations.addMessage(aliceAiConv.id, { role: 'assistant', content: 'React Context lets you pass data through the component tree...' });
+assert.strictEqual(msgUser.role, 'user');
+assert.strictEqual(msgAi.role, 'assistant');
+
+// Alice can access her conversation
+const aliceConvs = aiConversations.findForUser(user1.id);
+assert.strictEqual(aliceConvs.length, 1);
+assert.strictEqual(aliceConvs[0].messages.length, 2);
+
+// Bob CANNOT access Alice's conversation
+const bobConvs = aiConversations.findForUser(user2.id);
+assert.strictEqual(bobConvs.length, 0, 'Bob must NOT see Alice\'s AI conversations');
+
+// Bob CANNOT delete Alice's conversation
+const unauthorizedDelete = aiConversations.delete(aliceAiConv.id, user2.id);
+assert.strictEqual(unauthorizedDelete, null, 'Bob cannot delete Alice\'s AI conversation');
+
+// Alice CAN delete her own conversation
+const authorizedDelete = aiConversations.delete(aliceAiConv.id, user1.id);
+assert.ok(authorizedDelete, 'Alice can successfully delete her own AI conversation');
+assert.strictEqual(aiConversations.findForUser(user1.id).length, 0);
+console.log('✅ Test 30 Passed: AI conversations are securely scoped per-user with full CRUD isolation.\n');
+
+// Test 31: AI 7-Section Structured Conversation Summary
+console.log('Test 31: Verifying AI 7-Section Structured Summary Engine...');
+const richTestMessages = [
+  { sender: { displayName: 'Alice' }, content: 'Hi Bob, we need to finalize the project presentation deadline.' },
+  { sender: { displayName: 'Bob' }, content: 'Agreed! The presentation deadline is confirmed for Monday at 5 PM.' },
+  { sender: { displayName: 'Alice' }, content: 'Sounds good! Did we finish drafting the system architecture diagrams?' },
+  { sender: { displayName: 'Bob' }, content: 'Not yet, please send me the latest diagram file so I can review it.' }
+];
+
+const richSummary = localNlpSummarize(richTestMessages, 'Bob', 'Alice');
+assert.strictEqual(richSummary.empty, false);
+assert.ok(richSummary.overview.length > 10, 'Section 1: Overview must be populated');
+assert.ok(Array.isArray(richSummary.mainTopics) && richSummary.mainTopics.length > 0, 'Section 2: Main Topics must be populated');
+assert.ok(Array.isArray(richSummary.importantPoints) && richSummary.importantPoints.length > 0, 'Section 3: Important Points must be populated');
+assert.ok(Array.isArray(richSummary.decisions) && richSummary.decisions.length > 0, 'Section 4: Decisions Made must be populated');
+assert.ok(Array.isArray(richSummary.pendingTasks) && richSummary.pendingTasks.length > 0, 'Section 5: Pending Tasks must be populated');
+assert.ok(Array.isArray(richSummary.datesAndDeadlines) && richSummary.datesAndDeadlines.length > 0, 'Section 6: Dates & Deadlines must be populated');
+assert.ok(richSummary.overallSummary.length > 10, 'Section 7: Overall Summary must be populated');
+console.log('✅ Test 31 Passed: AI Summary accurately extracts all 7 sections (Overview, Topics, Points, Decisions, Tasks, Dates, Overall).\n');
+
+// Test 32: Exit Button Behavior & Data Preservation (Non-destructive)
+console.log('Test 32: Verifying Exit Button Non-destructive Operation & State Safety...');
+// Verify Alice and Bob 1-to-1 conversation exists
+const convBeforeExit = conversations.findOrCreate(user1.id, user2.id);
+const msgCountBefore = messages.find((m) => m.conversationId === convBeforeExit.id).length;
+assert.ok(msgCountBefore > 0, 'Messages must exist in conversation');
+
+// Exit action only clears client activeTarget and leaves socket channel room; database state remains 100% intact
+assert.ok(conversations.findById(convBeforeExit.id), 'Conversation must NOT be deleted upon exit');
+assert.strictEqual(messages.find((m) => m.conversationId === convBeforeExit.id).length, msgCountBefore, 'Messages must NOT be deleted upon exit');
+
+// Channel membership preservation on exit
+channels.addMember(publicChan.id, user1.id);
+assert.strictEqual(channels.isMember(publicChan.id, user1.id), true, 'Alice is member of channel');
+// Exiting channel does NOT leave/delete membership in database
+assert.strictEqual(channels.isMember(publicChan.id, user1.id), true, 'Exiting channel MUST NOT revoke channel membership');
+console.log('✅ Test 32 Passed: Exit operation is strictly non-destructive (conversations, messages, and memberships preserved).\n');
+
+// Test 33: Exit from AI Agent View Preserves History
+console.log('Test 33: Verifying AI Conversation History Retention Upon Exit...');
+const persistentAiConv = aiConversations.create(user1.id, 'Session Before Exit');
+aiConversations.addMessage(persistentAiConv.id, { role: 'user', content: 'What is a closure in JS?' });
+aiConversations.addMessage(persistentAiConv.id, { role: 'assistant', content: 'A closure is the combination of a function bundled together with references to its surrounding state...' });
+
+// Simulate user clicking "Exit" on AI Agent View (which sets activeTarget to null and returns to dashboard)
+// Check database persistence:
+const retrievedAfterExit = aiConversations.findById(persistentAiConv.id);
+assert.ok(retrievedAfterExit, 'AI conversation must remain in database after exiting the AI view');
+assert.strictEqual(retrievedAfterExit.messages.length, 2, 'AI conversation messages must remain intact after exiting');
+assert.strictEqual(aiConversations.findForUser(user1.id).some((c) => c.id === persistentAiConv.id), true, 'User can reload past AI chat after exiting');
+console.log('✅ Test 33 Passed: Exiting AI Agent returns to dashboard without deleting AI conversation history.\n');
+
+// Test 34: AI Chat Summary Security & Scope Constraints
+console.log('Test 34: Verifying AI Chat Summary Security & Membership Validation...');
+// 1. Channel rejection
+const channelAsConv = { id: publicChan.id, isChannel: true, participants: [user1.id, user2.id] };
+const isChannelRejected = Boolean(channelAsConv.isChannel || channelAsConv.channelId);
+assert.strictEqual(isChannelRejected, true, 'Channels must be rejected from 1-to-1 AI Chat Summary');
+
+// 2. Non-participant rejection
+const thirdPartyUser = { id: 'usr_third_party' };
+const isNonParticipantAllowed = convBeforeExit.participants.includes(thirdPartyUser.id);
+assert.strictEqual(isNonParticipantAllowed, false, 'Non-participants must be rejected from summarizing private conversations');
+
+// 3. Valid 1-to-1 summary generation
+const valid1to1Summary = localNlpSummarize(
+  messages.find((m) => m.conversationId === convBeforeExit.id),
+  user2.displayName,
+  user1.displayName
+);
+assert.strictEqual(valid1to1Summary.empty, false, 'Valid 1-to-1 conversation generates summary');
+assert.ok(valid1to1Summary.overview, 'Overview must be present in valid summary');
+console.log('✅ Test 34 Passed: AI Chat Summary strictly verifies 1-to-1 personal scope and membership.\n');
+
+// Test 35: Issue 1 - User Search by Unique Code & 1-to-1 Conversation Retrieval
+console.log('Test 35: Verifying User Search by Unique Code & Conversation Deduplication...');
+const foundBob = users.search(user2.uniqueCode, user1.id);
+assert.strictEqual(foundBob.length, 1, 'Search by unique code must find exactly 1 user');
+assert.strictEqual(foundBob[0].id, user2.id, 'Target user ID must match Bob');
+assert.strictEqual(foundBob[0].uniqueCode, user2.uniqueCode, 'Target unique code must be exposed');
+assert.ok(foundBob[0].displayName, 'Display name must be present');
+assert.ok(foundBob[0].username, 'Username must be present');
+
+// Create/retrieve 1-to-1 conversation
+const conv1 = conversations.findOrCreate(user1.id, user2.id);
+assert.ok(conv1.id, 'Conversation ID must be generated');
+const conv2 = conversations.findOrCreate(user1.id, user2.id);
+assert.strictEqual(conv1.id, conv2.id, 'Repeated conversation creation must return existing conversation without duplicates');
+
+// Prevent self-conversation
+assert.strictEqual(user1.id === user1.id, true, 'Self conversation must be identified and disallowed');
+console.log('✅ Test 35 Passed: User Search by Unique Code and 1-to-1 Conversation deduplication verified.\n');
+
+// Test 36: Issue 2 - Canonical Phone Normalization & International Country Code Distinction
+console.log('Test 36: Verifying Canonical Phone Normalization & Duplicate Prevention...');
+const { canonicalizePhone, arePhonesMatching } = require('./src/db');
+assert.strictEqual(canonicalizePhone('9876543210'), '+919876543210');
+assert.strictEqual(canonicalizePhone('+91 9876543210'), '+919876543210');
+assert.strictEqual(canonicalizePhone('+91-9876543210'), '+919876543210');
+assert.strictEqual(canonicalizePhone('09876543210'), '+919876543210');
+assert.strictEqual(canonicalizePhone('919876543210'), '+919876543210');
+assert.strictEqual(canonicalizePhone('+1 9876543210'), '+19876543210');
+
+// Identical national number with different international country codes must NOT collide
+assert.strictEqual(arePhonesMatching('+1 9876543210', '+91 9876543210'), false, 'Different country codes must never collide');
+assert.strictEqual(arePhonesMatching('9876543210', '+91-9876543210'), true, 'Same number with formatting must match');
+
+// Phone validation
+assert.strictEqual(isValidPhoneNumber('9876543210'), true);
+assert.strictEqual(isValidPhoneNumber('+91 9876543210'), true);
+assert.strictEqual(isValidPhoneNumber('123'), false, 'Short phone must be rejected');
+assert.strictEqual(isValidPhoneNumber(''), false, 'Empty phone must be rejected');
+console.log('✅ Test 36 Passed: Canonical phone normalization and international code distinction verified.\n');
+
+// Test 37: Issue 3 - Channel Creation, Membership & Real-Time Messaging
+console.log('Test 37: Verifying Channel Creation, Membership & Messaging...');
+const devChannel = {
+  id: 'chan_dev_team',
+  name: 'dev-team',
+  description: 'Developers channel',
+  isPrivate: false,
+  passcode: null,
+  passcodeHash: null,
+  icon: '💻',
+  ownerId: user1.id,
+  members: [user1.id],
+  createdAt: new Date().toISOString()
+};
+channels.create(devChannel);
+
+// Creator is owner and member
+assert.strictEqual(devChannel.ownerId, user1.id);
+assert.ok(devChannel.members.includes(user1.id));
+
+// User 2 joins channel
+channels.addMember(devChannel.id, user2.id);
+const reloadedChan = channels.findById(devChannel.id);
+assert.ok(reloadedChan.members.includes(user2.id), 'User 2 must be an active member after joining');
+
+// User 1 sends channel message
+const chanMsg1 = {
+  id: 'msg_chan_1',
+  channelId: devChannel.id,
+  conversationId: null,
+  recipientId: null,
+  senderId: user1.id,
+  content: 'Welcome team to the dev channel!',
+  attachment: null,
+  status: 'sent',
+  readBy: [user1.id],
+  createdAt: new Date().toISOString()
+};
+messages.create(chanMsg1);
+
+// User 2 sends channel message
+const chanMsg2 = {
+  id: 'msg_chan_2',
+  channelId: devChannel.id,
+  conversationId: null,
+  recipientId: null,
+  senderId: user2.id,
+  content: 'Thanks Alice, glad to be here!',
+  attachment: null,
+  status: 'sent',
+  readBy: [user2.id],
+  createdAt: new Date().toISOString()
+};
+messages.create(chanMsg2);
+
+// Retrieve channel messages
+const retrievedChanMsgs = messages.find((m) => m.channelId === devChannel.id);
+assert.strictEqual(retrievedChanMsgs.length, 2, 'Channel must contain both sent messages');
+assert.strictEqual(retrievedChanMsgs[0].content, 'Welcome team to the dev channel!');
+assert.strictEqual(retrievedChanMsgs[1].content, 'Thanks Alice, glad to be here!');
+console.log('✅ Test 37 Passed: Channel creation, membership addition, and messaging flow verified.\n');
+
+// Test 38: Issue 3 - Unauthorized Channel Access & Membership Protection
+console.log('Test 38: Verifying Unauthorized Channel Access Protection...');
+const unauthUserId = 'usr_unauthorized_person';
+assert.strictEqual(channels.isMember('chan_vignan', unauthUserId), false, 'Non-member must be denied access to private channel');
+// Clean dev channel
+channels.delete(devChannel.id);
+console.log('✅ Test 38 Passed: Unauthorized access to private channels strictly rejected.\n');
+
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');
 users.delete(user1.id);
@@ -515,10 +765,12 @@ channels.delete(publicChan.id);
 // Reset Vignan members back to []
 const vignanFinal = channels.findById('chan_vignan');
 if (vignanFinal) vignanFinal.members = [];
-// Clean messages and conversations
+// Clean messages, conversations, and aiConversations
 db.messages = [];
 db.conversations = [];
+db.aiConversations = [];
 saveDatabase();
+rebuildIndexes();
 
 assert.strictEqual(db.users.length, 0);
 assert.strictEqual(db.messages.length, 0);

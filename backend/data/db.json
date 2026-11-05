@@ -6,13 +6,14 @@
       "name": "Vignan",
       "description": "Official private channel for Vignan. Enter passcode to join.",
       "isPrivate": true,
-      "passcodeHash": "$2a$08$pm5Ud3SXuMs7xioJtF/3f.2GHYCP5PhFybBBU5C4UYqhGdxY7dIjK",
+      "passcodeHash": "$2a$08$ysDh8x0tyCZLOiXsVD9vgeN.SePgt8nQy9xQoggz21ORr1TKviRR.",
       "icon": "🔒",
       "ownerId": "system",
       "members": [],
-      "createdAt": "2026-11-05T07:40:06.949Z"
+      "createdAt": "2026-11-05T12:26:39.872Z"
     }
   ],
   "conversations": [],
-  "messages": []
+  "messages": [],
+  "aiConversations": []
 }

@@ -69,6 +69,10 @@ export const SocketProvider = ({ children }) => {
 
     s.on('connect', () => {
       setIsConnected(true);
+      if (activeTargetRef.current?.type === 'channel') {
+        s.emit('channel:join', activeTargetRef.current.id);
+        s.emit('join_channel', activeTargetRef.current.id);
+      }
     });
 
     s.on('disconnect', () => {
@@ -79,8 +83,8 @@ export const SocketProvider = ({ children }) => {
       setOnlineUserIds(Array.isArray(list) ? list : []);
     });
 
-    // Handle incoming messages
-    s.on('message:new', (newMsg) => {
+    // Handle incoming messages (supports both message:new and receive_channel_message)
+    const handleIncomingMessage = (newMsg) => {
       const current = activeTargetRef.current;
       if (!current) return;
 
@@ -96,7 +100,15 @@ export const SocketProvider = ({ children }) => {
           return [...prev, newMsg];
         });
       }
-    });
+
+      // Notify sidebar to refresh conversations list & latest message snippet
+      try {
+        window.dispatchEvent(new CustomEvent('chatsphere:conversation-updated'));
+      } catch (e) {}
+    };
+
+    s.on('message:new', handleIncomingMessage);
+    s.on('receive_channel_message', handleIncomingMessage);
 
     // Handle reaction updates
     s.on('message:updated', (updatedMsg) => {
@@ -137,25 +149,35 @@ export const SocketProvider = ({ children }) => {
     };
   }, [token, user?.id]);
 
-  // Handle switching active channels or DMs
+  // Handle switching active channels, DMs, or AI Agent
   const selectTarget = useCallback(async (type, id, details = {}) => {
-    if (!socketRef.current) return;
-
-    // Leave previous channel if applicable
-    if (activeTargetRef.current?.type === 'channel') {
+    // Leave previous channel room if applicable
+    if (socketRef.current && activeTargetRef.current?.type === 'channel') {
       socketRef.current.emit('channel:leave', activeTargetRef.current.id);
+      socketRef.current.emit('leave_channel', activeTargetRef.current.id);
     }
 
     const newTarget = { type, id, details };
     setActiveTarget(newTarget);
     activeTargetRef.current = newTarget;
     setTypingUsers({});
-    setLoadingMessages(true);
     setOfflineNotice(null);
+
+    // AI agent view manages its own conversations
+    if (type === 'ai') {
+      setMessages([]);
+      setLoadingMessages(false);
+      return;
+    }
+
+    setLoadingMessages(true);
 
     try {
       if (type === 'channel') {
-        socketRef.current.emit('channel:join', id);
+        if (socketRef.current) {
+          socketRef.current.emit('channel:join', id);
+          socketRef.current.emit('join_channel', id);
+        }
         const { messages: msgs } = await api.getChannelMessages(id);
         setMessages(msgs || []);
       } else if (type === 'direct') {
@@ -169,42 +191,82 @@ export const SocketProvider = ({ children }) => {
     }
   }, []);
 
-  // Send message with offline notification detection
+  // Exit currently opened chat, channel, or AI session and return to dashboard
+  const exitActiveTarget = useCallback(() => {
+    if (socketRef.current && activeTargetRef.current?.type === 'channel') {
+      socketRef.current.emit('channel:leave', activeTargetRef.current.id);
+      socketRef.current.emit('leave_channel', activeTargetRef.current.id);
+    }
+
+    setActiveTarget(null);
+    activeTargetRef.current = null;
+    setMessages([]);
+    setTypingUsers({});
+    setOfflineNotice(null);
+    setLoadingMessages(false);
+  }, []);
+
+  // Send message with offline notification detection and immediate local update
   const sendMessage = useCallback(
     async ({ content, attachment = null }) => {
-      if (!socketRef.current || !activeTarget) return;
+      if (!activeTarget) return;
 
       const isDirect = activeTarget.type === 'direct';
+      const isChannel = activeTarget.type === 'channel';
       const payload = {
-        channelId: activeTarget.type === 'channel' ? activeTarget.id : null,
+        channelId: isChannel ? activeTarget.id : null,
         recipientId: isDirect ? activeTarget.id : null,
         content,
         attachment
       };
 
-      return new Promise((resolve, reject) => {
-        socketRef.current.emit('message:send', payload, (response) => {
-          if (response?.error) {
-            reject(new Error(response.error));
-          } else {
-            // Check if receiver is offline
-            if (isDirect && response.isRecipientOffline) {
-              setOfflineNotice(
-                'Your friend is currently offline. Your message will be delivered when they come online.'
-              );
-              // Auto dismiss notice after 6 seconds
-              setTimeout(() => {
-                setOfflineNotice((current) =>
-                  current?.includes('offline') ? null : current
+      if (socketRef.current && isConnected) {
+        return new Promise((resolve, reject) => {
+          socketRef.current.emit('message:send', payload, (response) => {
+            if (response?.error) {
+              reject(new Error(response.error));
+            } else {
+              const msg = response?.message;
+              if (msg) {
+                setMessages((prev) => {
+                  if (prev.some((m) => m.id === msg.id)) return prev;
+                  return [...prev, msg];
+                });
+              }
+
+              // Check if receiver is offline
+              if (isDirect && response.isRecipientOffline) {
+                setOfflineNotice(
+                  'Your friend is currently offline. Your message will be delivered when they come online.'
                 );
-              }, 6000);
+                setTimeout(() => {
+                  setOfflineNotice((current) =>
+                    current?.includes('offline') ? null : current
+                  );
+                }, 6000);
+              }
+              resolve(msg);
             }
-            resolve(response.message);
-          }
+          });
         });
-      });
+      }
+
+      // REST API fallback for channel messages if socket is reconnecting
+      if (isChannel) {
+        const res = await api.sendChannelMessage(activeTarget.id, { content, attachment });
+        const fallbackMsg = res?.message;
+        if (fallbackMsg) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === fallbackMsg.id)) return prev;
+            return [...prev, fallbackMsg];
+          });
+          return fallbackMsg;
+        }
+      }
+
+      throw new Error('Chat service is temporarily disconnected. Reconnecting...');
     },
-    [activeTarget]
+    [activeTarget, isConnected]
   );
 
   // Send emoji reaction
@@ -239,6 +301,7 @@ export const SocketProvider = ({ children }) => {
         offlineNotice,
         setOfflineNotice,
         selectTarget,
+        exitActiveTarget,
         sendMessage,
         sendReaction,
         sendTypingStatus

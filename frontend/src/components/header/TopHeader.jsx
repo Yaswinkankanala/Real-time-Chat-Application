@@ -17,7 +17,7 @@ import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp }) {
   const { user, logout } = useAuth();
-  const { isConnected } = useSocket();
+  const { isConnected, activeTarget, selectTarget } = useSocket();
 
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -66,37 +66,53 @@ export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp })
         </div>
       </div>
 
-      {/* Center: Prominent User Unique Identification Code with Copy button */}
-      {user?.uniqueCode && (
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-500/30 shadow-sm transition-all hover:border-indigo-400">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-600 dark:text-indigo-400">
-              My Code:
-            </span>
-            <span className="font-mono text-sm font-extrabold text-slate-900 dark:text-white tracking-wider">
-              {user.uniqueCode}
-            </span>
+      {/* Center: Prominent User Unique Identification Code & Quick AI Action */}
+      <div className="flex items-center gap-2">
+        {user?.uniqueCode && (
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200/80 dark:border-indigo-500/30 shadow-sm transition-all hover:border-indigo-400">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-600 dark:text-indigo-400">
+                My Code:
+              </span>
+              <span className="font-mono text-sm font-extrabold text-slate-900 dark:text-white tracking-wider">
+                {user.uniqueCode}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCopyCode}
+              className="p-1 rounded-lg text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition flex items-center gap-1 text-[11px] font-medium"
+              title="Copy your unique identification code to share with friends"
+            >
+              {copiedCode ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                  <span className="text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline text-[10px]">Copy</span>
+                </>
+              )}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleCopyCode}
-            className="p-1 rounded-lg text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition flex items-center gap-1 text-[11px] font-medium"
-            title="Copy your unique identification code to share with friends"
-          >
-            {copiedCode ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-500" />
-                <span className="text-emerald-600 dark:text-emerald-400 text-[10px] font-bold">Copied!</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline text-[10px]">Copy</span>
-              </>
-            )}
-          </button>
-        </div>
-      )}
+        )}
+
+        <button
+          type="button"
+          onClick={() => selectTarget('ai', 'assistant', { name: 'ChatSphere AI Assistant' })}
+          className={`hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-2xl font-bold text-xs border shadow-sm transition active:scale-95 ${
+            activeTarget?.type === 'ai'
+              ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white border-indigo-500 shadow-indigo-500/20'
+              : 'bg-white dark:bg-slate-900 border-indigo-200/80 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
+          }`}
+          title="Open ChatSphere AI Assistant"
+        >
+          <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+          <span>AI Assistant</span>
+        </button>
+      </div>
 
       {/* Right: User Profile Picture & Dropdown Menu */}
       <div className="relative" ref={dropdownRef}>
@@ -174,7 +190,22 @@ export default function TopHeader({ onOpenProfile, onOpenSettings, onOpenHelp })
                 <span>Settings</span>
               </button>
 
-              {/* 3. Help */}
+              {/* 3. AI Assistant */}
+              <button
+                type="button"
+                onClick={() => {
+                  setDropdownOpen(false);
+                  selectTarget('ai', 'assistant', { name: 'ChatSphere AI Assistant' });
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800/80 transition text-left"
+              >
+                <div className="w-6 h-6 rounded-lg bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center">
+                  <Sparkles className="w-3.5 h-3.5" />
+                </div>
+                <span>AI Assistant</span>
+              </button>
+
+              {/* 4. Help */}
               <button
                 type="button"
                 onClick={() => {

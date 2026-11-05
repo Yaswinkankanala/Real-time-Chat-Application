@@ -55,3 +55,4 @@ export function handleAvatarError(e, displayName = 'User') {
     e.target.src = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName || 'User')}`;
   }
 }
+

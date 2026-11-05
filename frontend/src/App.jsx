@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from './context/AuthContext';
-import { SocketProvider } from './context/SocketContext';
+import { SocketProvider, useSocket } from './context/SocketContext';
 import LoginModal from './components/auth/LoginModal';
 import OnboardingModal from './components/profile/OnboardingModal';
 import ProfileModal from './components/profile/ProfileModal';
@@ -12,58 +12,82 @@ import ChatArea from './components/chat/ChatArea';
 import RightDetailsSidebar from './components/chat/RightDetailsSidebar';
 import ChatSphereLogo from './components/common/ChatSphereLogo';
 
-function AuthenticatedApp() {
+function MainWorkspace({
+  isProfileOpen,
+  setIsProfileOpen,
+  isSettingsOpen,
+  setIsSettingsOpen,
+  isHelpOpen,
+  setIsHelpOpen
+}) {
+  const { activeTarget } = useSocket();
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
+
+  return (
+    <div className="flex flex-col h-screen w-screen bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
+      {/* Top Navigation Header with Unique Code & Profile Dropdown */}
+      <TopHeader
+        onOpenProfile={() => setIsProfileOpen(true)}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenHelp={() => setIsHelpOpen(true)}
+      />
+
+      {/* Main Work Area: responsive mobile switching between list and active chat */}
+      <div className="flex-1 flex min-w-0 h-[calc(100vh-4rem)] overflow-hidden">
+        {/* Left Navigation Sidebar: On mobile, visible when activeTarget is null, hidden when chat is open */}
+        <div className={`${activeTarget ? 'hidden md:flex' : 'flex'} w-full md:w-72 h-full shrink-0`}>
+          <Sidebar onOpenProfile={() => setIsProfileOpen(true)} />
+        </div>
+
+        {/* Central Real-time Chat View: On mobile, visible when chat is open, hidden when exited */}
+        <main className={`${activeTarget ? 'flex' : 'hidden md:flex'} flex-1 flex flex-col min-w-0 h-full relative`}>
+          <ChatArea
+            onToggleRightSidebar={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+            isRightSidebarOpen={isRightSidebarOpen}
+          />
+        </main>
+
+        {/* Right Details Sidebar */}
+        <RightDetailsSidebar
+          isOpen={isRightSidebarOpen}
+          onClose={() => setIsRightSidebarOpen(false)}
+        />
+      </div>
+
+      {/* Global Modals */}
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+      />
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
+
+      <HelpModal
+        isOpen={isHelpOpen}
+        onClose={() => setIsHelpOpen(false)}
+      />
+    </div>
+  );
+}
+
+function AuthenticatedApp() {
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isHelpOpen, setIsHelpOpen] = useState(false);
 
   return (
     <SocketProvider>
-      <div className="flex flex-col h-screen w-screen bg-slate-100 dark:bg-slate-950 overflow-hidden font-sans text-slate-900 dark:text-slate-100 transition-colors">
-        {/* Top Navigation Header with Unique Code & Profile Dropdown */}
-        <TopHeader
-          onOpenProfile={() => setIsProfileOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onOpenHelp={() => setIsHelpOpen(true)}
-        />
-
-        {/* Main Work Area */}
-        <div className="flex-1 flex min-w-0 h-[calc(100vh-4rem)] overflow-hidden">
-          {/* Left Navigation Sidebar */}
-          <Sidebar onOpenProfile={() => setIsProfileOpen(true)} />
-
-          {/* Central Real-time Chat View */}
-          <main className="flex-1 flex flex-col min-w-0 h-full relative">
-            <ChatArea
-              onToggleRightSidebar={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-              isRightSidebarOpen={isRightSidebarOpen}
-            />
-          </main>
-
-          {/* Right Details Sidebar */}
-          <RightDetailsSidebar
-            isOpen={isRightSidebarOpen}
-            onClose={() => setIsRightSidebarOpen(false)}
-          />
-        </div>
-
-        {/* Global Modals */}
-        <ProfileModal
-          isOpen={isProfileOpen}
-          onClose={() => setIsProfileOpen(false)}
-        />
-
-        <SettingsModal
-          isOpen={isSettingsOpen}
-          onClose={() => setIsSettingsOpen(false)}
-        />
-
-        <HelpModal
-          isOpen={isHelpOpen}
-          onClose={() => setIsHelpOpen(false)}
-        />
-      </div>
+      <MainWorkspace
+        isProfileOpen={isProfileOpen}
+        setIsProfileOpen={setIsProfileOpen}
+        isSettingsOpen={isSettingsOpen}
+        setIsSettingsOpen={setIsSettingsOpen}
+        isHelpOpen={isHelpOpen}
+        setIsHelpOpen={setIsHelpOpen}
+      />
     </SocketProvider>
   );
 }

@@ -80,7 +80,7 @@ router.post('/register', async (req, res) => {
 
     const cleanPhone = mobileNumber.trim();
     if (!isValidPhoneNumber(cleanPhone)) {
-      return res.status(400).json({ error: 'Please enter a valid contact number (7-15 digits)' });
+      return res.status(400).json({ error: 'Please enter a valid contact number.' });
     }
 
     // 2. Prevent duplicate username
@@ -91,14 +91,14 @@ router.post('/register', async (req, res) => {
     // 3. Prevent duplicate email (exact required error string)
     if (users.findByEmail(cleanEmail)) {
       return res.status(400).json({
-        error: 'This email address is already registered. Please log in using your existing account.'
+        error: 'This email address is already registered. Please log in instead.'
       });
     }
 
     // 4. Prevent duplicate contact number (exact required error string)
     if (users.findByMobile(cleanPhone)) {
       return res.status(400).json({
-        error: 'This contact number is already registered with another account. Please use a different number.'
+        error: 'This contact number is already registered. Please use a different number.'
       });
     }
 

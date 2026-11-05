@@ -401,6 +401,10 @@ router.post('/conversations', requireCompletedProfile, (req, res) => {
     return res.status(400).json({ error: 'targetUserId is required' });
   }
 
+  if (targetUserId === currentUserId) {
+    return res.status(400).json({ error: 'Cannot start a conversation with yourself' });
+  }
+
   const targetUser = users.findById(targetUserId);
   if (!targetUser) {
     return res.status(404).json({ error: 'Target user does not exist' });
@@ -414,7 +418,8 @@ router.post('/conversations', requireCompletedProfile, (req, res) => {
       otherUser: sanitizeUser(targetUser, currentUserId),
       lastMessage: conv.lastMessage ? enrichMessage(conv.lastMessage) : null,
       unreadCount: 0,
-      createdAt: conv.createdAt
+      createdAt: conv.createdAt,
+      updatedAt: conv.updatedAt
     }
   });
 });
@@ -529,7 +534,7 @@ router.get('/channels', requireCompletedProfile, (req, res) => {
   const currentUserId = req.user.id;
 
   const list = channels.find().map((c) => {
-    const isMember = channels.isMember(c.id, currentUserId);
+    const isMember = c.ownerId === currentUserId || (Array.isArray(c.members) && c.members.includes(currentUserId));
     const isOwner = c.ownerId === currentUserId;
 
     return {
@@ -630,15 +635,18 @@ router.post('/channels/:id/join', requireCompletedProfile, (req, res) => {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
-  // If already member, return success
-  if (channels.isMember(id, currentUserId)) {
+  // If already an active member, return success
+  const isAlreadyMember = channel.ownerId === currentUserId || (Array.isArray(channel.members) && channel.members.includes(currentUserId));
+  if (isAlreadyMember) {
     return res.json({
       message: 'Already a member of this channel',
       channel: {
         id: channel.id,
         name: channel.name,
+        description: channel.description,
         isPrivate: channel.isPrivate,
-        isMember: true
+        isMember: true,
+        memberCount: Array.isArray(channel.members) ? channel.members.length : 0
       }
     });
   }
@@ -674,7 +682,7 @@ router.post('/channels/:id/join', requireCompletedProfile, (req, res) => {
       description: channel.description,
       isPrivate: channel.isPrivate,
       isMember: true,
-      memberCount: channel.members.length
+      memberCount: Array.isArray(channel.members) ? channel.members.length : 1
     }
   });
 });
@@ -707,7 +715,8 @@ router.get('/channels/:id/messages', requireCompletedProfile, (req, res) => {
     return res.status(404).json({ error: 'Channel not found' });
   }
 
-  if (channel.isPrivate && !channels.isMember(id, currentUserId)) {
+  const isMember = channel.ownerId === currentUserId || (Array.isArray(channel.members) && channel.members.includes(currentUserId));
+  if (channel.isPrivate && !isMember) {
     return res.status(403).json({ error: 'Passcode required. You must join this channel first.' });
   }
 
@@ -722,6 +731,61 @@ router.get('/channels/:id/messages', requireCompletedProfile, (req, res) => {
   });
 });
 
+// POST /api/channels/:id/messages - Send message to channel via REST API fallback
+router.post('/channels/:id/messages', requireCompletedProfile, (req, res) => {
+  const { id } = req.params;
+  const { content, attachment } = req.body;
+  const currentUserId = req.user.id;
+
+  if (!content?.trim() && !attachment) {
+    return res.status(400).json({ error: 'Message content or attachment is required' });
+  }
+
+  const channel = channels.findById(id);
+  if (!channel) {
+    return res.status(404).json({ error: 'Channel not found' });
+  }
+
+  const isMember = channel.ownerId === currentUserId || (Array.isArray(channel.members) && channel.members.includes(currentUserId));
+  if (channel.isPrivate && !isMember) {
+    return res.status(403).json({ error: 'Access denied: You must join this channel before sending messages' });
+  }
+
+  // For public channels, ensure user is registered in members
+  if (!isMember) {
+    channels.addMember(id, currentUserId);
+  }
+
+  const cleanContent = content ? content.trim() : '';
+  const newMsg = {
+    id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    channelId: id,
+    conversationId: null,
+    recipientId: null,
+    senderId: currentUserId,
+    content: cleanContent,
+    attachment: attachment || null,
+    status: 'sent',
+    readBy: [currentUserId],
+    reactions: {},
+    createdAt: new Date().toISOString()
+  };
+
+  messages.create(newMsg);
+  const enriched = enrichMessage(newMsg);
+
+  // Broadcast via Socket.IO if available
+  const io = req.app.get('io');
+  if (io) {
+    io.to(`channel:${id}`).emit('message:new', enriched);
+    io.to(`channel:${id}`).emit('receive_channel_message', enriched);
+    io.to(`user:${currentUserId}`).emit('message:new', enriched);
+    io.to(`user:${currentUserId}`).emit('receive_channel_message', enriched);
+  }
+
+  return res.status(201).json({ status: 'ok', message: enriched });
+});
+
 // GET /api/channels/:id - Get channel details
 router.get('/channels/:id', requireCompletedProfile, (req, res) => {
   const { id } = req.params;
@@ -733,7 +797,7 @@ router.get('/channels/:id', requireCompletedProfile, (req, res) => {
   }
 
   const isOwner = channel.ownerId === currentUserId;
-  const isMember = channels.isMember(id, currentUserId);
+  const isMember = channel.ownerId === currentUserId || (Array.isArray(channel.members) && channel.members.includes(currentUserId));
 
   res.json({
     channel: {

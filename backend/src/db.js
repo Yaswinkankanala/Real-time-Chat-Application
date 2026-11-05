@@ -14,7 +14,8 @@ let db = {
   users: [],
   channels: [],
   conversations: [],
-  messages: []
+  messages: [],
+  aiConversations: []
 };
 
 // Initial default private channel: Vignan with passcode 1299 (hashed securely)
@@ -53,11 +54,121 @@ function generateUniqueCode() {
   return code;
 }
 
+// Database-level normalization and error types
+class DuplicateKeyError extends Error {
+  constructor(field, message) {
+    super(message);
+    this.name = 'DuplicateKeyError';
+    this.field = field;
+    this.code = 11000;
+  }
+}
+
+function normalizeEmail(email) {
+  if (!email || typeof email !== 'string') return '';
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Canonical Phone Normalization
+ * Standardizes phone numbers so identical numbers with different formats
+ * (e.g. "9876543210", "+91 9876543210", "+91-9876543210", "09876543210")
+ * produce the same canonical key, while preserving distinct international country codes
+ * (e.g. "+1 9876543210" vs "+91 9876543210").
+ */
+function canonicalizePhone(phone) {
+  if (!phone || typeof phone !== 'string') return '';
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+
+  // If input starts with '+', treat leading digits as international country code
+  if (trimmed.startsWith('+')) {
+    return `+${digits}`;
+  }
+
+  // If input starts with '00', treat as international dialing prefix
+  if (digits.startsWith('00') && digits.length > 7) {
+    return `+${digits.substring(2)}`;
+  }
+
+  // If input starts with single '0' followed by 10 digits (national trunk prefix in India, e.g. 09876543210)
+  if (digits.startsWith('0') && digits.length === 11) {
+    return `+91${digits.substring(1)}`;
+  }
+
+  // If exactly 10 digits without country code, default to +91 (India)
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+
+  // If 12 digits starting with '91' without '+' (e.g. 919876543210)
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+${digits}`;
+  }
+
+  // If 11 digits starting with '1' without '+' (e.g. 14155552671 US/Canada)
+  if (digits.length === 11 && digits.startsWith('1')) {
+    return `+${digits}`;
+  }
+
+  return `+${digits}`;
+}
+
+function normalizePhone(phone) {
+  return canonicalizePhone(phone);
+}
+
+function arePhonesMatching(phone1, phone2) {
+  if (!phone1 || !phone2) return false;
+  const c1 = canonicalizePhone(phone1);
+  const c2 = canonicalizePhone(phone2);
+  if (!c1 || !c2) return false;
+  return c1 === c2;
+}
+
+// In-memory unique indexes to enforce strict uniqueness constraints
+const indexes = {
+  emails: new Map(),     // normalized email -> userId
+  phones: new Map(),     // canonical phone -> userId
+  usernames: new Map()   // normalized username -> userId
+};
+
+function rebuildIndexes() {
+  indexes.emails.clear();
+  indexes.phones.clear();
+  indexes.usernames.clear();
+
+  if (Array.isArray(db.users)) {
+    db.users.forEach((u) => {
+      if (u.email) {
+        const normEmail = normalizeEmail(u.email);
+        if (normEmail && !indexes.emails.has(normEmail)) {
+          indexes.emails.set(normEmail, u.id);
+        }
+      }
+      if (u.mobileNumber) {
+        const canonPhone = canonicalizePhone(u.mobileNumber);
+        if (canonPhone && !indexes.phones.has(canonPhone)) {
+          indexes.phones.set(canonPhone, u.id);
+        }
+      }
+      if (u.username) {
+        const normUser = (u.username || '').trim().toLowerCase();
+        if (normUser && !indexes.usernames.has(normUser)) {
+          indexes.usernames.set(normUser, u.id);
+        }
+      }
+    });
+  }
+}
+
 function ensureInitialState() {
   if (!Array.isArray(db.users)) db.users = [];
   if (!Array.isArray(db.channels)) db.channels = [];
   if (!Array.isArray(db.conversations)) db.conversations = [];
   if (!Array.isArray(db.messages)) db.messages = [];
+  if (!Array.isArray(db.aiConversations)) db.aiConversations = [];
 
   // Remove any legacy demo users or AI bots
   db.users = db.users.filter(
@@ -113,6 +224,7 @@ function ensureInitialState() {
   });
 
   saveDatabase();
+  rebuildIndexes();
 }
 
 function loadDatabase() {
@@ -125,7 +237,8 @@ function loadDatabase() {
         users: [],
         channels: [INITIAL_VIGNAN_CHANNEL],
         conversations: [],
-        messages: []
+        messages: [],
+        aiConversations: []
       };
     }
     ensureInitialState();
@@ -135,9 +248,11 @@ function loadDatabase() {
       users: [],
       channels: [INITIAL_VIGNAN_CHANNEL],
       conversations: [],
-      messages: []
+      messages: [],
+      aiConversations: []
     };
     saveDatabase();
+    rebuildIndexes();
   }
 }
 
@@ -179,42 +294,6 @@ function sanitizeUser(user, viewerId = null) {
   };
 }
 
-// Database-level normalization and error types
-class DuplicateKeyError extends Error {
-  constructor(field, message) {
-    super(message);
-    this.name = 'DuplicateKeyError';
-    this.field = field;
-    this.code = 11000;
-  }
-}
-
-function normalizeEmail(email) {
-  if (!email || typeof email !== 'string') return '';
-  return email.trim().toLowerCase();
-}
-
-function normalizePhone(phone) {
-  if (!phone || typeof phone !== 'string') return '';
-  const trimmed = phone.trim();
-  const digits = trimmed.replace(/[^0-9]/g, '');
-  if (!digits) return '';
-  return trimmed.startsWith('+') ? `+${digits}` : digits;
-}
-
-function arePhonesMatching(phone1, phone2) {
-  if (!phone1 || !phone2) return false;
-  const d1 = String(phone1).replace(/[^0-9]/g, '');
-  const d2 = String(phone2).replace(/[^0-9]/g, '');
-  if (!d1 || !d2) return false;
-  if (d1 === d2) return true;
-  // If one has country code prefix (e.g. +91 9876543210 vs 9876543210)
-  if (d1.length >= 10 && d2.length >= 10) {
-    if (d1.slice(-10) === d2.slice(-10)) return true;
-  }
-  return false;
-}
-
 module.exports = {
   db,
   saveDatabase,
@@ -222,8 +301,11 @@ module.exports = {
   generateUniqueCode,
   normalizeEmail,
   normalizePhone,
+  canonicalizePhone,
   arePhonesMatching,
   DuplicateKeyError,
+  indexes,
+  rebuildIndexes,
   users: {
     find: (predicate) => (predicate ? db.users.filter(predicate) : db.users),
     findOne: (predicate) => db.users.find(predicate),
@@ -232,7 +314,13 @@ module.exports = {
       if (!email) return null;
       const clean = normalizeEmail(email);
       if (!clean) return null;
-      return db.users.find((u) => normalizeEmail(u.email) === clean);
+      const indexedId = indexes.emails.get(clean);
+      if (indexedId) {
+        const user = db.users.find((u) => u.id === indexedId);
+        if (user) return user;
+        indexes.emails.delete(clean);
+      }
+      return db.users.find((u) => normalizeEmail(u.email) === clean) || null;
     },
     findByFirebaseUid: (uid) => {
       if (!uid) return null;
@@ -241,11 +329,24 @@ module.exports = {
     findByUsername: (username) => {
       if (!username) return null;
       const clean = (username || '').trim().toLowerCase();
-      return db.users.find((u) => (u.username || '').trim().toLowerCase() === clean);
+      const indexedId = indexes.usernames.get(clean);
+      if (indexedId) {
+        const user = db.users.find((u) => u.id === indexedId);
+        if (user) return user;
+        indexes.usernames.delete(clean);
+      }
+      return db.users.find((u) => (u.username || '').trim().toLowerCase() === clean) || null;
     },
     findByMobile: (mobileNumber) => {
       if (!mobileNumber) return null;
-      return db.users.find((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, mobileNumber));
+      const canon = canonicalizePhone(mobileNumber);
+      if (canon && indexes.phones.has(canon)) {
+        const indexedId = indexes.phones.get(canon);
+        const user = db.users.find((u) => u.id === indexedId);
+        if (user) return user;
+        indexes.phones.delete(canon);
+      }
+      return db.users.find((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, mobileNumber)) || null;
     },
     findByUniqueCode: (code) => {
       if (!code) return null;
@@ -255,10 +356,11 @@ module.exports = {
       // 1. Enforce unique normalized email constraint at database model level
       if (user.email) {
         const normEmail = normalizeEmail(user.email);
-        if (normEmail && db.users.some((u) => normalizeEmail(u.email) === normEmail)) {
+        const existingWithEmail = db.users.find((u) => normalizeEmail(u.email) === normEmail);
+        if (normEmail && ((indexes.emails.has(normEmail) && existingWithEmail) || existingWithEmail)) {
           throw new DuplicateKeyError(
             'email',
-            'This email address is already registered. Please log in using your existing account.'
+            'This email address is already registered. Please log in instead.'
           );
         }
         user.email = normEmail;
@@ -266,18 +368,22 @@ module.exports = {
 
       // 2. Enforce unique normalized contact number constraint at database model level
       if (user.mobileNumber) {
-        if (db.users.some((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, user.mobileNumber))) {
+        const canonPhone = canonicalizePhone(user.mobileNumber);
+        const existingWithPhone = db.users.find((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, user.mobileNumber));
+        if (canonPhone && ((indexes.phones.has(canonPhone) && existingWithPhone) || existingWithPhone)) {
           throw new DuplicateKeyError(
             'mobileNumber',
-            'This contact number is already registered with another account. Please use a different number.'
+            'This contact number is already registered. Please use a different number.'
           );
         }
+        user.mobileNumber = canonPhone;
       }
 
       // 3. Enforce unique username constraint at database model level
       if (user.username) {
         const normUser = (user.username || '').trim().toLowerCase();
-        if (normUser && db.users.some((u) => (u.username || '').trim().toLowerCase() === normUser)) {
+        const existingWithUser = db.users.find((u) => (u.username || '').trim().toLowerCase() === normUser);
+        if (normUser && ((indexes.usernames.has(normUser) && existingWithUser) || existingWithUser)) {
           throw new DuplicateKeyError('username', 'This username is already taken by another user.');
         }
       }
@@ -291,20 +397,30 @@ module.exports = {
       if (!user.theme) {
         user.theme = 'dark';
       }
+
       db.users.push(user);
+
+      // Update in-memory unique indexes
+      if (user.email) indexes.emails.set(user.email, user.id);
+      if (user.mobileNumber) indexes.phones.set(user.mobileNumber, user.id);
+      if (user.username) indexes.usernames.set(user.username.toLowerCase(), user.id);
+
       saveDatabase();
       return user;
     },
     update: (id, updates) => {
       const idx = db.users.findIndex((u) => u.id === id);
       if (idx !== -1) {
+        const existing = db.users[idx];
+
         // Enforce unique email check if updating email
         if (updates.email) {
           const normEmail = normalizeEmail(updates.email);
-          if (normEmail && db.users.some((u) => u.id !== id && normalizeEmail(u.email) === normEmail)) {
+          const ownerId = indexes.emails.get(normEmail);
+          if (normEmail && ((ownerId && ownerId !== id) || db.users.some((u) => u.id !== id && normalizeEmail(u.email) === normEmail))) {
             throw new DuplicateKeyError(
               'email',
-              'This email address is already registered. Please log in using your existing account.'
+              'This email address is already registered. Please log in instead.'
             );
           }
           updates.email = normEmail;
@@ -312,18 +428,22 @@ module.exports = {
 
         // Enforce unique contact number check if updating phone
         if (updates.mobileNumber) {
-          if (db.users.some((u) => u.id !== id && u.mobileNumber && arePhonesMatching(u.mobileNumber, updates.mobileNumber))) {
+          const canonPhone = canonicalizePhone(updates.mobileNumber);
+          const ownerId = indexes.phones.get(canonPhone);
+          if (canonPhone && ((ownerId && ownerId !== id) || db.users.some((u) => u.id !== id && u.mobileNumber && arePhonesMatching(u.mobileNumber, updates.mobileNumber)))) {
             throw new DuplicateKeyError(
               'mobileNumber',
-              'This contact number is already registered with another account. Please use a different number.'
+              'This contact number is already registered. Please use a different number.'
             );
           }
+          updates.mobileNumber = canonPhone;
         }
 
         // Enforce unique username check if updating username
         if (updates.username) {
           const normUser = (updates.username || '').trim().toLowerCase();
-          if (normUser && db.users.some((u) => u.id !== id && (u.username || '').trim().toLowerCase() === normUser)) {
+          const ownerId = indexes.usernames.get(normUser);
+          if (normUser && ((ownerId && ownerId !== id) || db.users.some((u) => u.id !== id && (u.username || '').trim().toLowerCase() === normUser))) {
             throw new DuplicateKeyError('username', 'This username is already taken by another user.');
           }
         }
@@ -333,7 +453,24 @@ module.exports = {
         delete updates.createdAt;
         delete updates.id;
 
+        // Clean previous index entries if changed
+        if (updates.email && existing.email && existing.email !== updates.email) {
+          indexes.emails.delete(existing.email);
+        }
+        if (updates.mobileNumber && existing.mobileNumber && existing.mobileNumber !== updates.mobileNumber) {
+          indexes.phones.delete(existing.mobileNumber);
+        }
+        if (updates.username && existing.username && existing.username.toLowerCase() !== updates.username.toLowerCase()) {
+          indexes.usernames.delete(existing.username.toLowerCase());
+        }
+
         db.users[idx] = { ...db.users[idx], ...updates };
+
+        // Set new index entries
+        if (db.users[idx].email) indexes.emails.set(db.users[idx].email, id);
+        if (db.users[idx].mobileNumber) indexes.phones.set(db.users[idx].mobileNumber, id);
+        if (db.users[idx].username) indexes.usernames.set(db.users[idx].username.toLowerCase(), id);
+
         saveDatabase();
         return db.users[idx];
       }
@@ -343,6 +480,11 @@ module.exports = {
       const idx = db.users.findIndex((u) => u.id === id);
       if (idx !== -1) {
         const deletedUser = db.users.splice(idx, 1)[0];
+
+        // Clean from indexes
+        if (deletedUser.email) indexes.emails.delete(deletedUser.email);
+        if (deletedUser.mobileNumber) indexes.phones.delete(deletedUser.mobileNumber);
+        if (deletedUser.username) indexes.usernames.delete(deletedUser.username.toLowerCase());
 
         // Remove user from channel memberships
         db.channels.forEach((c) => {
@@ -363,6 +505,7 @@ module.exports = {
             m.recipientId !== id &&
             !userConvIds.includes(m.conversationId)
         );
+        db.aiConversations = db.aiConversations.filter((c) => c.userId !== id);
 
         saveDatabase();
         return deletedUser;
@@ -374,20 +517,24 @@ module.exports = {
       if (!clean) return [];
 
       const cleanDigits = clean.replace(/[^0-9]/g, '');
+      const canonQuery = canonicalizePhone(query);
 
       return db.users
         .filter((u) => {
           if (u.id === currentUserId) return false;
 
-          // Match by Unique Code (exact or starting with)
+          // Match by Unique Code (exact or partial)
           if (u.uniqueCode && u.uniqueCode.toLowerCase() === clean) return true;
           if (u.uniqueCode && u.uniqueCode.toLowerCase().includes(clean)) return true;
 
-          // Match by Contact / Mobile Number (with or without symbols)
-          if (cleanDigits.length >= 3 && u.mobileNumber) {
-            const uDigits = u.mobileNumber.replace(/[^0-9]/g, '');
-            if (uDigits.includes(cleanDigits) || u.mobileNumber.toLowerCase().includes(clean)) {
-              return true;
+          // Match by Contact / Mobile Number (canonical exact or digits match)
+          if (u.mobileNumber) {
+            if (canonQuery && canonicalizePhone(u.mobileNumber) === canonQuery) return true;
+            if (cleanDigits.length >= 3) {
+              const uDigits = u.mobileNumber.replace(/[^0-9]/g, '');
+              if (uDigits.includes(cleanDigits) || u.mobileNumber.toLowerCase().includes(clean)) {
+                return true;
+              }
             }
           }
 
@@ -433,8 +580,15 @@ module.exports = {
     isMember: (channelId, userId) => {
       const c = db.channels.find((ch) => ch.id === channelId);
       if (!c) return false;
+      if (c.ownerId === userId) return true;
+      if (Array.isArray(c.members) && c.members.includes(userId)) return true;
       if (!c.isPrivate) return true; // public channels accessible to registered users
-      return Array.isArray(c.members) && c.members.includes(userId);
+      return false;
+    },
+    isExplicitMember: (channelId, userId) => {
+      const c = db.channels.find((ch) => ch.id === channelId);
+      if (!c) return false;
+      return c.ownerId === userId || (Array.isArray(c.members) && c.members.includes(userId));
     },
     addMember: (channelId, userId) => {
       const c = db.channels.find((ch) => ch.id === channelId);
@@ -512,6 +666,61 @@ module.exports = {
       const idx = db.messages.findIndex((m) => m.id === id);
       if (idx !== -1) {
         const deleted = db.messages.splice(idx, 1)[0];
+        saveDatabase();
+        return deleted;
+      }
+      return null;
+    }
+  },
+  aiConversations: {
+    find: (predicate) => (predicate ? db.aiConversations.filter(predicate) : db.aiConversations),
+    findForUser: (userId) =>
+      db.aiConversations
+        .filter((c) => c.userId === userId)
+        .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt)),
+    findById: (id) => db.aiConversations.find((c) => c.id === id),
+    create: (userId, title = 'New Conversation') => {
+      const newConv = {
+        id: `aiconv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId,
+        title: title || 'New Conversation',
+        messages: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      db.aiConversations.push(newConv);
+      saveDatabase();
+      return newConv;
+    },
+    addMessage: (convId, { role, content }) => {
+      const conv = db.aiConversations.find((c) => c.id === convId);
+      if (!conv) return null;
+      if (!Array.isArray(conv.messages)) conv.messages = [];
+      const msg = {
+        id: `aimsg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        role: role === 'user' ? 'user' : 'assistant',
+        content: String(content || ''),
+        timestamp: new Date().toISOString()
+      };
+      conv.messages.push(msg);
+      conv.updatedAt = new Date().toISOString();
+      saveDatabase();
+      return msg;
+    },
+    updateTitle: (id, title) => {
+      const conv = db.aiConversations.find((c) => c.id === id);
+      if (conv) {
+        conv.title = title;
+        conv.updatedAt = new Date().toISOString();
+        saveDatabase();
+        return conv;
+      }
+      return null;
+    },
+    delete: (id, userId) => {
+      const idx = db.aiConversations.findIndex((c) => c.id === id && c.userId === userId);
+      if (idx !== -1) {
+        const deleted = db.aiConversations.splice(idx, 1)[0];
         saveDatabase();
         return deleted;
       }

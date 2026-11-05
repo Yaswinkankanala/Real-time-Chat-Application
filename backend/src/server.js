@@ -10,6 +10,7 @@ dotenv.config();
 
 const authRoutes = require('./routes/authRoutes');
 const { router: chatRoutes } = require('./routes/chatRoutes');
+const aiRoutes = require('./routes/aiRoutes');
 const { setupSocket } = require('./socket');
 
 const app = express();
@@ -88,6 +89,7 @@ app.get('/api/health', (req, res) => {
 
 // API Routes
 app.use('/api/auth', authRoutes);
+app.use('/api/ai', aiRoutes);
 app.use('/api', chatRoutes);
 
 // Serve frontend static build in production if available
@@ -110,6 +112,7 @@ const io = new Server(server, {
   }
 });
 
+app.set('io', io);
 setupSocket(io);
 
 const PORT = process.env.PORT || 5000;
