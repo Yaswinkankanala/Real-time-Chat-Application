@@ -89,11 +89,10 @@ export default function App() {
     return <LoginModal />;
   }
 
-  return (
-    <>
-      <AuthenticatedApp />
-      {/* Onboarding profile completion modal if mandatory profile fields are missing */}
-      <OnboardingModal isOpen={showOnboarding || !user?.profileCompleted} />
-    </>
-  );
+  // Pending Registration State: Incomplete users must strictly complete all 8 mandatory fields before accessing dashboard, chats, or channels
+  if (!user.profileCompleted || showOnboarding) {
+    return <OnboardingModal isOpen={true} />;
+  }
+
+  return <AuthenticatedApp />;
 }

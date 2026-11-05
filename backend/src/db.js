@@ -17,13 +17,12 @@ let db = {
   messages: []
 };
 
-// Initial default private channel: Vignan with passcode 1299
+// Initial default private channel: Vignan with passcode 1299 (hashed securely)
 const INITIAL_VIGNAN_CHANNEL = {
   id: 'chan_vignan',
   name: 'Vignan',
   description: 'Official private channel for Vignan. Enter passcode to join.',
   isPrivate: true,
-  passcode: '1299',
   passcodeHash: bcrypt.hashSync('1299', 8),
   icon: '🔒',
   ownerId: 'system',
@@ -75,10 +74,12 @@ function ensureInitialState() {
   if (vignanIdx === -1) {
     db.channels.unshift(INITIAL_VIGNAN_CHANNEL);
   } else {
-    // Ensure Vignan properties are strictly maintained
+    // Ensure Vignan properties are strictly maintained with hashed passcode (never plaintext)
     db.channels[vignanIdx].isPrivate = true;
-    db.channels[vignanIdx].passcode = '1299';
-    db.channels[vignanIdx].passcodeHash = bcrypt.hashSync('1299', 8);
+    delete db.channels[vignanIdx].passcode;
+    if (!db.channels[vignanIdx].passcodeHash) {
+      db.channels[vignanIdx].passcodeHash = bcrypt.hashSync('1299', 8);
+    }
     if (!Array.isArray(db.channels[vignanIdx].members)) {
       db.channels[vignanIdx].members = [];
     }

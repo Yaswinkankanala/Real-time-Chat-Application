@@ -8,13 +8,14 @@ import {
   Globe,
   Key,
   UserPlus,
-  MessageSquare
+  MessageSquare,
+  Compass
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
 import { api } from '../../services/api';
 import CreateChannelModal from './CreateChannelModal';
-import JoinChannelModal from './JoinChannelModal';
+import ExploreChannelsModal from './ExploreChannelsModal';
 import FindPeopleModal from '../chat/FindPeopleModal';
 
 export default function Sidebar({ onOpenProfile }) {
@@ -30,7 +31,7 @@ export default function Sidebar({ onOpenProfile }) {
   const [conversations, setConversations] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isCreateChannelOpen, setIsCreateChannelOpen] = useState(false);
-  const [isJoinChannelOpen, setIsJoinChannelOpen] = useState(false);
+  const [isExploreChannelsOpen, setIsExploreChannelsOpen] = useState(false);
   const [isFindPeopleOpen, setIsFindPeopleOpen] = useState(false);
 
   // Load channels and conversations from database
@@ -41,13 +42,19 @@ export default function Sidebar({ onOpenProfile }) {
         api.getConversations()
       ]);
       const fetchedChannels = chanRes.channels || [];
+      const fetchedConversations = convRes.conversations || [];
       setChannels(fetchedChannels);
-      setConversations(convRes.conversations || []);
+      setConversations(fetchedConversations);
 
-      // If nothing selected and Vignan channel exists, select Vignan
-      if (!activeTarget && fetchedChannels.length > 0) {
-        const vignan = fetchedChannels.find((c) => c.name.toLowerCase() === 'vignan') || fetchedChannels[0];
-        selectTarget('channel', vignan.id, vignan);
+      // Only select if user has joined channels or active conversations (never auto-select unjoined Vignan!)
+      if (!activeTarget) {
+        const joined = fetchedChannels.filter((c) => c.isMember);
+        if (joined.length > 0) {
+          selectTarget('channel', joined[0].id, joined[0]);
+        } else if (fetchedConversations.length > 0) {
+          const firstConv = fetchedConversations[0];
+          selectTarget('direct', firstConv.otherUser.id, firstConv.otherUser);
+        }
       }
     } catch (err) {
       console.error('Failed to load sidebar data:', err);
@@ -67,10 +74,12 @@ export default function Sidebar({ onOpenProfile }) {
     setChannels((prev) =>
       prev.map((c) => (c.id === joinedChan.id ? { ...c, isMember: true } : c))
     );
-    selectTarget('channel', joinedChan.id, joinedChan);
+    selectTarget('channel', joinedChan.id, { ...joinedChan, isMember: true });
   };
 
-  const filteredChannels = channels.filter((c) =>
+  // Only show channels the user has joined (Vignan only appears if joined!)
+  const joinedChannels = channels.filter((c) => c.isMember);
+  const filteredChannels = joinedChannels.filter((c) =>
     c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -114,15 +123,15 @@ export default function Sidebar({ onOpenProfile }) {
         {/* Channels Section */}
         <div>
           <div className="flex items-center justify-between px-2 mb-1.5 text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-            <span>Channels ({filteredChannels.length})</span>
+            <span>Joined Channels ({filteredChannels.length})</span>
             <div className="flex items-center gap-1">
               <button
                 type="button"
-                onClick={() => setIsJoinChannelOpen(true)}
-                className="p-1 rounded-lg text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white hover:bg-slate-200/60 dark:hover:bg-slate-800 transition"
-                title="Join a channel (passcode)"
+                onClick={() => setIsExploreChannelsOpen(true)}
+                className="p-1 rounded-lg text-slate-500 hover:text-indigo-600 dark:text-slate-400 dark:hover:text-indigo-400 hover:bg-slate-200/60 dark:hover:bg-slate-800 transition"
+                title="Explore and join channels"
               >
-                <Key className="w-3.5 h-3.5" />
+                <Compass className="w-3.5 h-3.5" />
               </button>
               <button
                 type="button"
@@ -135,9 +144,33 @@ export default function Sidebar({ onOpenProfile }) {
             </div>
           </div>
 
+          {/* Explore Channels Action Button */}
+          <button
+            type="button"
+            onClick={() => setIsExploreChannelsOpen(true)}
+            className="w-full flex items-center justify-between px-3 py-2 mb-2 rounded-xl bg-indigo-50/70 hover:bg-indigo-100/80 dark:bg-indigo-950/40 dark:hover:bg-indigo-900/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/40 font-bold text-xs transition shadow-sm active:scale-98"
+          >
+            <div className="flex items-center gap-2">
+              <Compass className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+              <span>Explore Channels</span>
+            </div>
+            <span className="text-[10px] font-semibold bg-white dark:bg-slate-900 px-1.5 py-0.5 rounded-md text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/40">
+              Discover
+            </span>
+          </button>
+
           <div className="space-y-0.5">
             {filteredChannels.length === 0 ? (
-              <p className="px-2 py-2 text-[11px] text-slate-400 italic">No channels found</p>
+              <div className="px-3 py-2.5 text-center text-slate-400 dark:text-slate-500 text-xs rounded-xl border border-dashed border-slate-200 dark:border-slate-800">
+                <p className="font-medium text-[11px]">No joined channels yet</p>
+                <button
+                  type="button"
+                  onClick={() => setIsExploreChannelsOpen(true)}
+                  className="mt-1 text-indigo-600 dark:text-indigo-400 hover:underline font-bold text-[11px]"
+                >
+                  Explore & Join Channels
+                </button>
+              </div>
             ) : (
               filteredChannels.map((c) => {
                 const isActive = activeTarget?.type === 'channel' && activeTarget.id === c.id;
@@ -181,18 +214,6 @@ export default function Sidebar({ onOpenProfile }) {
                         </span>
                       )}
                     </div>
-
-                    {c.isPrivate && !c.isMember && (
-                      <span
-                        className={`px-1.5 py-0.2 rounded text-[9px] font-bold shrink-0 ${
-                          isActive
-                            ? 'bg-white/20 text-white'
-                            : 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
-                        }`}
-                      >
-                        Passcode
-                      </span>
-                    )}
                   </button>
                 );
               })
@@ -304,9 +325,9 @@ export default function Sidebar({ onOpenProfile }) {
         onChannelCreated={handleChannelCreated}
       />
 
-      <JoinChannelModal
-        isOpen={isJoinChannelOpen}
-        onClose={() => setIsJoinChannelOpen(false)}
+      <ExploreChannelsModal
+        isOpen={isExploreChannelsOpen}
+        onClose={() => setIsExploreChannelsOpen(false)}
         channels={channels}
         onChannelJoined={handleChannelJoined}
       />

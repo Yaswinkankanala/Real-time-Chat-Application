@@ -24,7 +24,7 @@ const DEFAULT_INTERESTS = [
 ];
 
 export default function OnboardingModal({ isOpen }) {
-  const { user, updateUserProfile } = useAuth();
+  const { user, updateUserProfile, logout } = useAuth();
 
   const [formData, setFormData] = useState({
     displayName: '',
@@ -57,7 +57,7 @@ export default function OnboardingModal({ isOpen }) {
         gender: user.gender || '',
         avatar: user.avatar || '',
         bio: user.bio || '',
-        interests: Array.isArray(user.interests) && user.interests.length > 0 ? user.interests : ['Tech & Coding']
+        interests: Array.isArray(user.interests) && user.interests.length > 0 ? user.interests : []
       });
       setPreviewAvatar(user.avatar || '');
     }
@@ -132,11 +132,11 @@ export default function OnboardingModal({ isOpen }) {
     setError('');
 
     if (!formData.displayName.trim()) {
-      setError('Full Name is required.');
+      setError('Full Name is mandatory.');
       return;
     }
     if (!formData.username.trim()) {
-      setError('Username is required.');
+      setError('Username is mandatory.');
       return;
     }
     if (!formData.gender) {
@@ -144,23 +144,33 @@ export default function OnboardingModal({ isOpen }) {
       return;
     }
     if (!formData.dob) {
-      setError('Date of Birth is required.');
+      setError('Date of Birth is mandatory.');
       return;
     }
     if (!formData.mobileNumber.trim()) {
-      setError('Contact Number is required.');
+      setError('Contact Number is mandatory.');
+      return;
+    }
+    const phoneDigits = formData.mobileNumber.replace(/[^0-9]/g, '');
+    if (phoneDigits.length < 7 || phoneDigits.length > 15) {
+      setError('Please enter a valid Contact Number (7 to 15 digits).');
       return;
     }
     if (!formData.email.trim()) {
-      setError('Email Address is required.');
+      setError('Email Address is mandatory.');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(formData.email.trim())) {
+      setError('Please enter a valid Email Address.');
       return;
     }
     if (!formData.avatar && !previewAvatar) {
-      setError('Profile Photo is required. Please select an image.');
+      setError('Profile photo upload is compulsory. Please select or upload a photo.');
       return;
     }
-    if (formData.interests.length === 0) {
-      setError('Please select at least one interest.');
+    if (!formData.interests || formData.interests.length === 0) {
+      setError('Interests must contain at least one selection.');
       return;
     }
 
@@ -419,6 +429,16 @@ export default function OnboardingModal({ isOpen }) {
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
+            </button>
+          </div>
+
+          <div className="pt-1 text-center">
+            <button
+              type="button"
+              onClick={logout}
+              className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition underline underline-offset-4"
+            >
+              Sign out / Cancel registration
             </button>
           </div>
         </form>

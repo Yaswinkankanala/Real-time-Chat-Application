@@ -156,6 +156,12 @@ export const api = {
 
   getDirectMessages: (targetUserId) => request(`/conversations/${targetUserId}/messages`),
 
+  // AI Chat Summary (1-to-1 Personal Conversations ONLY)
+  summarizeConversation: (idOrTargetUserId) =>
+    request(`/conversations/${idOrTargetUserId}/summarize`, {
+      method: 'POST'
+    }),
+
   // Channels
   getChannels: () => request('/channels'),
 

@@ -5,6 +5,7 @@ const fs = require('fs');
 const bcrypt = require('bcryptjs');
 const { users, channels, conversations, messages, sanitizeUser } = require('../db');
 const { authMiddleware } = require('../auth');
+const { generateSummary } = require('../aiSummary');
 
 const router = express.Router();
 
@@ -71,6 +72,21 @@ function enrichMessage(msg) {
 // All chat routes require authentication
 router.use(authMiddleware);
 
+// Middleware: Strictly enforce completed profile before accessing dashboard, chats, and channels
+function requireCompletedProfile(req, res, next) {
+  const user = users.findById(req.user.id);
+  if (!user) {
+    return res.status(404).json({ error: 'User account not found' });
+  }
+  if (!user.profileCompleted) {
+    return res.status(403).json({
+      error: 'Incomplete registration. You must complete all 8 mandatory profile details before accessing chats, channels, or dashboard.',
+      requireProfileCompletion: true
+    });
+  }
+  next();
+}
+
 // ==========================================
 // 1. FILE & PROFILE PHOTO UPLOAD API
 // ==========================================
@@ -93,7 +109,7 @@ router.post('/upload', upload.single('file'), (req, res) => {
 // ==========================================
 
 // GET /api/users - List users
-router.get('/users', (req, res) => {
+router.get('/users', requireCompletedProfile, (req, res) => {
   const currentUserId = req.user.id;
   const list = users
     .find((u) => u.id !== currentUserId)
@@ -102,14 +118,14 @@ router.get('/users', (req, res) => {
 });
 
 // GET /api/users/search?q=... - Search registered users by Unique Code or Contact Number
-router.get('/users/search', (req, res) => {
+router.get('/users/search', requireCompletedProfile, (req, res) => {
   const { q } = req.query;
   const results = users.search(q, req.user.id);
   res.json({ users: results });
 });
 
 // GET /api/users/:id - Get specific user public profile
-router.get('/users/:id', (req, res) => {
+router.get('/users/:id', requireCompletedProfile, (req, res) => {
   const user = users.findById(req.params.id);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
@@ -234,7 +250,21 @@ router.put('/users/profile', (req, res) => {
   const finalAvatar = updates.avatar || currentUser.avatar;
   const finalInterests = updates.interests || currentUser.interests;
 
-  if (
+  // If user was not yet completed, explicitly validate all 8 fields with clear messages
+  if (!currentUser.profileCompleted) {
+    if (!finalName?.trim()) return res.status(400).json({ error: 'Full Name is mandatory.' });
+    if (!finalUser?.trim()) return res.status(400).json({ error: 'Username is mandatory.' });
+    if (!finalGender?.trim()) return res.status(400).json({ error: 'Gender is mandatory.' });
+    if (!finalDob?.trim()) return res.status(400).json({ error: 'Date of Birth is mandatory.' });
+    if (!finalPhone?.trim()) return res.status(400).json({ error: 'Contact Number is mandatory.' });
+    if (!finalEmail?.trim()) return res.status(400).json({ error: 'Email Address is mandatory.' });
+    if (!finalAvatar?.trim()) return res.status(400).json({ error: 'Profile photo upload is compulsory.' });
+    if (!Array.isArray(finalInterests) || finalInterests.length === 0) {
+      return res.status(400).json({ error: 'Interests must contain at least one selection.' });
+    }
+  }
+
+  const isAllComplete = Boolean(
     finalName?.trim() &&
     finalUser?.trim() &&
     finalEmail?.trim() &&
@@ -243,9 +273,9 @@ router.put('/users/profile', (req, res) => {
     finalDob?.trim() &&
     finalAvatar?.trim() &&
     Array.isArray(finalInterests) && finalInterests.length > 0
-  ) {
-    updates.profileCompleted = true;
-  }
+  );
+
+  updates.profileCompleted = isAllComplete;
 
   // Explicit protection: Unique identification code and creation date can never be changed
   delete updates.uniqueCode;
@@ -303,7 +333,7 @@ router.delete('/users/account', (req, res) => {
 // ==========================================
 
 // GET /api/conversations - List all direct conversations
-router.get('/conversations', (req, res) => {
+router.get('/conversations', requireCompletedProfile, (req, res) => {
   const currentUserId = req.user.id;
   const userConvs = conversations.findForUser(currentUserId);
 
@@ -332,7 +362,7 @@ router.get('/conversations', (req, res) => {
 });
 
 // POST /api/conversations - Find or create 1-to-1 conversation
-router.post('/conversations', (req, res) => {
+router.post('/conversations', requireCompletedProfile, (req, res) => {
   const { targetUserId } = req.body;
   const currentUserId = req.user.id;
 
@@ -359,7 +389,7 @@ router.post('/conversations', (req, res) => {
 });
 
 // GET /api/conversations/:targetUserId/messages - Get 1-to-1 message history
-router.get('/conversations/:targetUserId/messages', (req, res) => {
+router.get('/conversations/:targetUserId/messages', requireCompletedProfile, (req, res) => {
   const currentUserId = req.user.id;
   const { targetUserId } = req.params;
 
@@ -385,12 +415,86 @@ router.get('/conversations/:targetUserId/messages', (req, res) => {
   });
 });
 
+/**
+ * POST /api/conversations/:idOrTargetUserId/summarize
+ * AI Chat Summary - EXCLUSIVELY for 1-to-1 Personal Conversations
+ * 
+ * Strict Privacy & Scope Protections:
+ * - Only 1-to-1 direct chats can be summarized (channels are rejected).
+ * - Verified participant authentication required.
+ * - Cannot access other users' conversations.
+ * - Does NOT send messages or participate in chats.
+ */
+router.post('/conversations/:idOrTargetUserId/summarize', requireCompletedProfile, async (req, res) => {
+  const currentUserId = req.user.id;
+  const { idOrTargetUserId } = req.params;
+
+  // Resolve conversation by ID or participant user ID
+  let conv = conversations.findById(idOrTargetUserId);
+  if (!conv) {
+    conv = conversations.findByParticipants(currentUserId, idOrTargetUserId);
+  }
+  if (!conv) {
+    conv = conversations.findOrCreate(currentUserId, idOrTargetUserId);
+  }
+
+  // Security check: Must exist and requesting user must be an active participant
+  if (!conv || !Array.isArray(conv.participants) || !conv.participants.includes(currentUserId)) {
+    return res.status(403).json({
+      error: 'Access denied: You can only summarize personal conversations that you participate in.'
+    });
+  }
+
+  // Security check: Explicitly reject channels if somehow requested
+  if (conv.isChannel || conv.channelId) {
+    return res.status(400).json({
+      error: 'AI Chat Summary is only permitted for one-to-one personal conversations.'
+    });
+  }
+
+  const otherUserId = conv.participants.find((p) => p !== currentUserId) || currentUserId;
+  const otherUser = users.findById(otherUserId);
+  const currentUser = users.findById(currentUserId);
+
+  // Retrieve strictly 1-to-1 conversation messages (never channels)
+  const convMsgs = messages
+    .find((m) => m.conversationId === conv.id && !m.channelId)
+    .map(enrichMessage)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+  if (convMsgs.length === 0) {
+    return res.json({
+      empty: true,
+      conversationId: conv.id,
+      message: 'There are no messages available to summarize yet.'
+    });
+  }
+
+  try {
+    const summary = await generateSummary(
+      convMsgs,
+      otherUser?.displayName || otherUser?.username || 'Friend',
+      currentUser?.displayName || currentUser?.username || 'You'
+    );
+
+    return res.json({
+      success: true,
+      conversationId: conv.id,
+      otherUser: otherUser ? sanitizeUser(otherUser, currentUserId) : null,
+      summary
+    });
+  } catch (err) {
+    console.error('AI summary error:', err);
+    return res.status(500).json({ error: 'Failed to generate conversation summary. Please try again.' });
+  }
+});
+
 // ==========================================
 // 4. CHANNELS MANAGEMENT APIS
 // ==========================================
 
 // GET /api/channels - List channels (Vignan + User-created)
-router.get('/channels', (req, res) => {
+router.get('/channels', requireCompletedProfile, (req, res) => {
   const currentUserId = req.user.id;
 
   const list = channels.find().map((c) => {
@@ -417,7 +521,7 @@ router.get('/channels', (req, res) => {
 });
 
 // POST /api/channels - Create a public or private channel
-router.post('/channels', (req, res) => {
+router.post('/channels', requireCompletedProfile, (req, res) => {
   const { name, description, isPrivate, passcode, icon } = req.body;
   const currentUserId = req.user.id;
 
@@ -457,7 +561,6 @@ router.post('/channels', (req, res) => {
     name: cleanName,
     description: description ? description.trim() : '',
     isPrivate: Boolean(isPrivate),
-    passcode: finalPasscode,
     passcodeHash,
     icon: icon || (isPrivate ? '🔒' : '💬'),
     ownerId: currentUserId,
@@ -486,7 +589,7 @@ router.post('/channels', (req, res) => {
 });
 
 // POST /api/channels/:id/join - Join public or private channel with passcode validation
-router.post('/channels/:id/join', (req, res) => {
+router.post('/channels/:id/join', requireCompletedProfile, (req, res) => {
   const { id } = req.params;
   const { passcode } = req.body;
   const currentUserId = req.user.id;
@@ -526,7 +629,7 @@ router.post('/channels/:id/join', (req, res) => {
     }
 
     if (!isMatch) {
-      return res.status(401).json({ error: 'Incorrect channel passcode. Access denied.' });
+      return res.status(401).json({ error: 'Incorrect passcode. Please try again.' });
     }
   }
 
@@ -546,7 +649,7 @@ router.post('/channels/:id/join', (req, res) => {
 });
 
 // POST /api/channels/:id/leave - Leave a channel
-router.post('/channels/:id/leave', (req, res) => {
+router.post('/channels/:id/leave', requireCompletedProfile, (req, res) => {
   const { id } = req.params;
   const currentUserId = req.user.id;
 
@@ -564,7 +667,7 @@ router.post('/channels/:id/leave', (req, res) => {
 });
 
 // GET /api/channels/:id/messages - Get channel message stream
-router.get('/channels/:id/messages', (req, res) => {
+router.get('/channels/:id/messages', requireCompletedProfile, (req, res) => {
   const { id } = req.params;
   const currentUserId = req.user.id;
 
@@ -589,7 +692,7 @@ router.get('/channels/:id/messages', (req, res) => {
 });
 
 // GET /api/channels/:id - Get channel details
-router.get('/channels/:id', (req, res) => {
+router.get('/channels/:id', requireCompletedProfile, (req, res) => {
   const { id } = req.params;
   const currentUserId = req.user.id;
 

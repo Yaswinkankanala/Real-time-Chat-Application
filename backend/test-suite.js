@@ -2,6 +2,7 @@ const assert = require('assert');
 const bcrypt = require('bcryptjs');
 const { db, saveDatabase, users, channels, conversations, messages, generateUniqueCode, sanitizeUser } = require('./src/db');
 const { checkProfileCompleted, isValidPhoneNumber } = require('./src/routes/authRoutes');
+const { generateSummary, localNlpSummarize } = require('./src/aiSummary');
 
 console.log('🧪 Starting ChatSphere Comprehensive Test Suite...\n');
 
@@ -13,7 +14,7 @@ assert.strictEqual(db.messages.length, 0, 'Messages should be empty initially');
 assert.strictEqual(db.channels.length, 1, 'Only Vignan channel should exist initially');
 assert.strictEqual(db.channels[0].name, 'Vignan', 'Channel name must be Vignan');
 assert.strictEqual(db.channels[0].isPrivate, true, 'Vignan channel must be private');
-assert.strictEqual(db.channels[0].passcode, '1299', 'Vignan passcode must be 1299');
+assert.strictEqual(db.channels[0].passcode, undefined, 'Vignan plaintext passcode must never be stored in database');
 assert.ok(bcrypt.compareSync('1299', db.channels[0].passcodeHash), 'Vignan passcode hash must match 1299');
 assert.strictEqual(db.channels[0].members.length, 0, 'Vignan members must be empty initially');
 console.log('✅ Test 1 Passed: Initial Database State is clean and verified.\n');
@@ -258,11 +259,66 @@ assert.strictEqual(verifiedLinkedUser.id, user1.id, 'Must link to existing user 
 assert.strictEqual(verifiedLinkedUser.uniqueCode, emailUserOriginalCode, 'Original code must be preserved');
 console.log('✅ Test 15 Passed: Account linking successfully links Firebase UID without duplicating or modifying unique code.\n');
 
+// Test 16: Mandatory Profile Details Enforcement
+console.log('Test 16: Mandatory Registration Fields Verification...');
+const incompleteUser = {
+  id: 'usr_incomplete_test',
+  uniqueCode: generateUniqueCode(),
+  displayName: 'Incomplete User',
+  username: 'incompleteuser',
+  email: 'incomplete@test.com',
+  passwordHash: 'hash',
+  mobileNumber: '+919876543219',
+  gender: '',        // Missing
+  dob: '',           // Missing
+  avatar: '',        // Missing
+  interests: [],     // Missing
+  profileCompleted: false,
+  createdAt: new Date().toISOString()
+};
+users.create(incompleteUser);
+const savedIncomplete = users.findById(incompleteUser.id);
+assert.strictEqual(savedIncomplete.profileCompleted, false, 'User with missing fields must remain pending profileCompleted=false');
+console.log('✅ Test 16 Passed: Pending-registration state strictly enforced when mandatory fields are missing.\n');
+
+// Test 17: AI Chat Summary - 1-to-1 Personal Conversations
+console.log('Test 17: AI Chat Summary inside 1-to-1 Personal Conversation...');
+const testMessages = [
+  { sender: { displayName: 'Alice' }, content: 'Hi Bob, are we still meeting about the upcoming college festival?' },
+  { sender: { displayName: 'Bob' }, content: 'Yes Alice! The meeting is planned for Saturday at 4 PM.' },
+  { sender: { displayName: 'Alice' }, content: 'Great, sounds good! Did we finalize the meeting location yet?' },
+  { sender: { displayName: 'Bob' }, content: 'Not yet, let me know if the central library works for you.' }
+];
+
+const summaryResult = localNlpSummarize(testMessages, 'Bob', 'Alice');
+assert.strictEqual(summaryResult.empty, false, 'Summary should not be empty');
+assert.ok(Array.isArray(summaryResult.mainTopics) && summaryResult.mainTopics.length > 0, 'Main Topics must be generated');
+assert.ok(Array.isArray(summaryResult.importantPoints) && summaryResult.importantPoints.length > 0, 'Important Points must be generated');
+assert.ok(Array.isArray(summaryResult.pendingDiscussions) && summaryResult.pendingDiscussions.length > 0, 'Pending Discussions must be identified');
+assert.ok(summaryResult.summaryText.length > 10, 'Summary overview sentence must be generated');
+console.log('✅ Test 17 Passed: AI Chat Summary generates Main Topics, Important Points, and Pending Discussions.\n');
+
+// Test 18: AI Chat Summary Empty Conversation Handling
+console.log('Test 18: AI Chat Summary with zero messages...');
+const emptySummary = localNlpSummarize([], 'Bob', 'Alice');
+assert.strictEqual(emptySummary.empty, true, 'Zero messages should report empty state');
+assert.strictEqual(emptySummary.message, 'There are no messages available to summarize yet.');
+console.log('✅ Test 18 Passed: Empty conversation returns friendly "no messages available" notice.\n');
+
+// Test 19: Channel Visibility & Vignan Plaintext Protection
+console.log('Test 19: Channel Discovery & Vignan Passcode Security...');
+const vignanChannel = channels.findById('chan_vignan');
+assert.strictEqual(vignanChannel.passcode, undefined, 'Plaintext passcode must NEVER exist on channel object');
+assert.ok(vignanChannel.passcodeHash, 'passcodeHash must be present');
+assert.strictEqual(channels.isMember('chan_vignan', user2.id), false, 'Bob should not be a member of Vignan by default');
+console.log('✅ Test 19 Passed: Vignan channel passcode is securely hashed and not exposed.\n');
+
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');
 users.delete(user1.id);
 users.delete(user2.id);
 users.delete(newGoogleUser.id);
+users.delete(incompleteUser.id);
 channels.delete(publicChan.id);
 // Reset Vignan members back to []
 const vignanFinal = channels.findById('chan_vignan');

@@ -22,6 +22,9 @@ function setupSocket(io) {
     if (!user) {
       return next(new Error('User not found'));
     }
+    if (!user.profileCompleted) {
+      return next(new Error('Profile registration incomplete. Complete all mandatory details first.'));
+    }
 
     socket.user = user;
     next();

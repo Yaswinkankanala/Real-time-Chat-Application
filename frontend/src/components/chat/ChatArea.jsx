@@ -8,12 +8,14 @@ import {
   UserPlus,
   AlertCircle,
   Clock,
-  WifiOff
+  WifiOff,
+  Sparkles
 } from 'lucide-react';
 import { useSocket } from '../../context/SocketContext';
 import MessageItem from './MessageItem';
 import MessageInput from './MessageInput';
 import FindPeopleModal from './FindPeopleModal';
+import AiChatSummaryModal from './AiChatSummaryModal';
 
 export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
   const {
@@ -27,6 +29,7 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
   } = useSocket();
 
   const [isFindPeopleOpen, setIsFindPeopleOpen] = React.useState(false);
+  const [isSummaryOpen, setIsSummaryOpen] = React.useState(false);
   const scrollRef = useRef(null);
 
   // Auto-scroll to bottom on new messages
@@ -124,8 +127,21 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
           </div>
         </div>
 
-        {/* Header Right Action: Toggle details sidebar */}
+        {/* Header Right Actions */}
         <div className="flex items-center gap-2">
+          {/* AI Chat Summary: Exclusively for 1-to-1 Personal Conversations */}
+          {isDirect && (
+            <button
+              type="button"
+              onClick={() => setIsSummaryOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50 dark:from-indigo-950/40 dark:to-purple-950/40 text-indigo-600 dark:text-indigo-400 border border-indigo-200/80 dark:border-indigo-800/60 hover:border-indigo-400 dark:hover:border-indigo-600 font-bold text-xs shadow-sm transition active:scale-95"
+              title="Summarize this 1-to-1 conversation with AI"
+            >
+              <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="hidden sm:inline">Summarize Conversation</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onToggleRightSidebar}
@@ -197,6 +213,13 @@ export default function ChatArea({ onToggleRightSidebar, isRightSidebarOpen }) {
 
       {/* Input */}
       <MessageInput />
+
+      {/* AI Chat Summary Modal (1-to-1 Personal Chats ONLY) */}
+      <AiChatSummaryModal
+        isOpen={isSummaryOpen}
+        onClose={() => setIsSummaryOpen(false)}
+        targetUser={isDirect ? activeTarget.details : null}
+      />
     </div>
   );
 }
