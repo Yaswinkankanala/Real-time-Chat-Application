@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useSocket } from '../../context/SocketContext';
+import { getBackendHost } from '../../services/api';
 import { resolveAvatarUrl, handleAvatarError } from '../../utils/avatar';
 
 const AVAILABLE_EMOJIS = ['👍', '❤️', '🔥', '🚀', '✨', '😂', '🎉', '👏'];
@@ -17,17 +18,9 @@ function resolveAttachmentUrl(url) {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
 
-  let backendUrl = '';
-  try {
-    backendUrl = localStorage.getItem('chatsphere_backend_url') || import.meta.env.VITE_API_URL || '';
-  } catch (e) {}
-
-  if (backendUrl) {
-    const clean = backendUrl.replace(/\/api\/?$/, '').replace(/\/+$/, '');
-    return `${clean}${url}`;
-  }
-
-  return url;
+  const host = getBackendHost();
+  const cleanUrl = url.startsWith('/') ? url : `/${url}`;
+  return `${host}${cleanUrl}`;
 }
 
 export default function MessageItem({ message }) {

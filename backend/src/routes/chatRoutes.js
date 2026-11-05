@@ -462,51 +462,57 @@ router.get('/conversations/:targetUserId/messages', requireCompletedProfile, (re
  * - Does NOT send messages or participate in chats.
  */
 router.post('/conversations/:idOrTargetUserId/summarize', requireCompletedProfile, async (req, res) => {
-  const currentUserId = req.user.id;
-  const { idOrTargetUserId } = req.params;
-
-  // Resolve conversation by ID or participant user ID
-  let conv = conversations.findById(idOrTargetUserId);
-  if (!conv) {
-    conv = conversations.findByParticipants(currentUserId, idOrTargetUserId);
-  }
-  if (!conv) {
-    conv = conversations.findOrCreate(currentUserId, idOrTargetUserId);
-  }
-
-  // Security check: Must exist and requesting user must be an active participant
-  if (!conv || !Array.isArray(conv.participants) || !conv.participants.includes(currentUserId)) {
-    return res.status(403).json({
-      error: 'Access denied: You can only summarize personal conversations that you participate in.'
-    });
-  }
-
-  // Security check: Explicitly reject channels if somehow requested
-  if (conv.isChannel || conv.channelId) {
-    return res.status(400).json({
-      error: 'AI Chat Summary is only permitted for one-to-one personal conversations.'
-    });
-  }
-
-  const otherUserId = conv.participants.find((p) => p !== currentUserId) || currentUserId;
-  const otherUser = users.findById(otherUserId);
-  const currentUser = users.findById(currentUserId);
-
-  // Retrieve strictly 1-to-1 conversation messages (never channels)
-  const convMsgs = messages
-    .find((m) => m.conversationId === conv.id && !m.channelId)
-    .map(enrichMessage)
-    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-  if (convMsgs.length === 0) {
-    return res.json({
-      empty: true,
-      conversationId: conv.id,
-      message: 'There are no messages available to summarize yet.'
-    });
-  }
-
   try {
+    const currentUserId = req.user.id;
+    const { idOrTargetUserId } = req.params;
+
+    // Resolve conversation by ID or participant user ID
+    let conv = conversations.findById(idOrTargetUserId);
+    if (!conv) {
+      conv = conversations.findByParticipants(currentUserId, idOrTargetUserId);
+    }
+    if (!conv) {
+      conv = conversations.findOrCreate(currentUserId, idOrTargetUserId);
+    }
+
+    // Security check: Must exist and requesting user must be an active participant
+    if (!conv || !Array.isArray(conv.participants) || !conv.participants.includes(currentUserId)) {
+      return res.status(403).json({
+        error: 'Access denied: You can only summarize personal conversations that you participate in.'
+      });
+    }
+
+    // Security check: Explicitly reject channels if somehow requested
+    if (conv.isChannel || conv.channelId) {
+      return res.status(400).json({
+        error: 'AI Chat Summary is only permitted for one-to-one personal conversations.'
+      });
+    }
+
+    const otherUserId = conv.participants.find((p) => p !== currentUserId) || currentUserId;
+    const otherUser = users.findById(otherUserId);
+    const currentUser = users.findById(currentUserId);
+
+    // Retrieve strictly 1-to-1 conversation messages (never channels)
+    const convMsgs = messages
+      .find(
+        (m) =>
+          !m.channelId &&
+          (m.conversationId === conv.id ||
+            (m.senderId === currentUserId && m.recipientId === otherUserId) ||
+            (m.senderId === otherUserId && m.recipientId === currentUserId))
+      )
+      .map(enrichMessage)
+      .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+    if (convMsgs.length === 0) {
+      return res.json({
+        empty: true,
+        conversationId: conv.id,
+        message: 'There are no messages available to summarize yet.'
+      });
+    }
+
     const summary = await generateSummary(
       convMsgs,
       otherUser?.displayName || otherUser?.username || 'Friend',
@@ -520,8 +526,10 @@ router.post('/conversations/:idOrTargetUserId/summarize', requireCompletedProfil
       summary
     });
   } catch (err) {
-    console.error('AI summary error:', err);
-    return res.status(500).json({ error: 'Failed to generate conversation summary. Please try again.' });
+    console.error('AI summary error in /api/conversations/:id/summarize:', err);
+    return res.status(500).json({
+      error: err.message || 'Failed to generate conversation summary. Please try again.'
+    });
   }
 });
 

@@ -677,6 +677,12 @@ module.exports = {
     find: (predicate) => (predicate ? db.conversations.filter(predicate) : db.conversations),
     findById: (id) => db.conversations.find((c) => c.id === id),
     findForUser: (userId) => db.conversations.filter((c) => c.participants.includes(userId)),
+    findByParticipants: (userId1, userId2) => {
+      if (!userId1 || !userId2) return null;
+      return db.conversations.find(
+        (c) => Array.isArray(c.participants) && c.participants.includes(userId1) && c.participants.includes(userId2)
+      ) || null;
+    },
     findOrCreate: (userId1, userId2) => {
       let conv = db.conversations.find(
         (c) => c.participants.includes(userId1) && c.participants.includes(userId2)

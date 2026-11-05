@@ -8,7 +8,7 @@ const SocketContext = createContext(null);
 const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
 const defaultSocketUrl = isDev
   ? 'http://localhost:5000'
-  : (typeof window !== 'undefined' && window.location.origin ? window.location.origin : 'http://localhost:5000');
+  : 'https://chatsphere-backend-jqnf.onrender.com';
 
 function normalizeSocketUrl() {
   try {

@@ -31,3 +31,4 @@ const result = executeReset();
 console.log(`✅ Backup created at: ${result.backupFile}`);
 console.log('✅ Database reset to clean state with default private Vignan channel (passcode 1299).');
 console.log('Reset summary:', JSON.stringify(result.deletedCounts, null, 2));
+

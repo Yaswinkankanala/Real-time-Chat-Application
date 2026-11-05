@@ -1,32 +1,44 @@
 const isDev = typeof window !== 'undefined' && (window.location.port === '5173' || window.location.port === '3000');
 
-function getCustomBackendUrl() {
+// Canonical backend hosts
+const PRODUCTION_BACKEND_HOST = 'https://chatsphere-backend-jqnf.onrender.com';
+const DEVELOPMENT_BACKEND_HOST = 'http://localhost:5000';
+
+/**
+ * Returns the backend root host (WITHOUT /api, WITHOUT trailing slash)
+ * Guaranteed: "https://chatsphere-backend-jqnf.onrender.com" or "http://localhost:5000"
+ */
+export function getBackendHost() {
   try {
     if (typeof window !== 'undefined') {
       const stored = localStorage.getItem('chatsphere_backend_url');
-      if (stored && stored.trim()) return stored.trim();
+      if (stored && stored.trim()) {
+        return stored.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+      }
     }
   } catch (e) {}
-  return null;
-}
 
-const defaultBaseUrl = isDev
-  ? 'http://localhost:5000/api'
-  : (typeof window !== 'undefined' && window.location.origin ? `${window.location.origin}/api` : 'http://localhost:5000/api');
-
-// Normalize API URL: ensures /api suffix and removes any trailing slash
-function normalizeApiUrl(url) {
-  const custom = getCustomBackendUrl();
-  const target = custom || url || defaultBaseUrl;
-  let clean = target.trim().replace(/\/+$/, '');
-  if (!clean.endsWith('/api')) {
-    clean += '/api';
+  const envBackend = import.meta.env.VITE_BACKEND_URL;
+  if (envBackend && envBackend.trim()) {
+    return envBackend.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
   }
-  return clean;
+
+  const envApi = import.meta.env.VITE_API_URL;
+  if (envApi && envApi.trim()) {
+    return envApi.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  }
+
+  return isDev ? DEVELOPMENT_BACKEND_HOST : PRODUCTION_BACKEND_HOST;
 }
 
+/**
+ * Returns the canonical backend API base URL (WITH /api, WITHOUT trailing slash)
+ * Guaranteed: "https://chatsphere-backend-jqnf.onrender.com/api" or "http://localhost:5000/api"
+ * Never creates duplicate /api/api!
+ */
 export function getBaseUrl() {
-  return normalizeApiUrl(import.meta.env.VITE_API_URL);
+  const host = getBackendHost();
+  return `${host}/api`;
 }
 
 function getHeaders() {
@@ -40,13 +52,15 @@ function getHeaders() {
 
 async function request(endpoint, options = {}) {
   const currentBase = getBaseUrl();
-  const url = `${currentBase}${endpoint}`;
+  const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  const url = `${currentBase}${cleanEndpoint}`;
+
   const headers = options.isFormData
     ? {
-      ...(localStorage.getItem('chatsphere_auth_token')
-        ? { Authorization: `Bearer ${localStorage.getItem('chatsphere_auth_token')}` }
-        : {})
-    }
+        ...(localStorage.getItem('chatsphere_auth_token')
+          ? { Authorization: `Bearer ${localStorage.getItem('chatsphere_auth_token')}` }
+          : {})
+      }
     : { ...getHeaders(), ...(options.headers || {}) };
 
   const config = {
@@ -62,13 +76,18 @@ async function request(endpoint, options = {}) {
   try {
     response = await fetch(url, config);
   } catch (netErr) {
-    throw new Error(`Cannot connect to Backend at ${currentBase}. Please verify your Render Backend URL.`);
+    if (!navigator.onLine) {
+      throw new Error('You appear to be offline. Please check your internet connection.');
+    }
+    throw new Error(
+      `Cannot connect to Backend at ${currentBase}. If this is a cold start on Render, please wait a moment and click Retry.`
+    );
   }
 
   const contentType = response.headers.get('content-type') || '';
   if (contentType.includes('text/html')) {
     throw new Error(
-      `Backend API not reached at ${currentBase}. The server returned an HTML page. Please set VITE_API_URL in Render or enter your Backend URL in Settings.`
+      `Backend API not reached at ${currentBase}. The server returned an HTML page. Please verify your Render service is running.`
     );
   }
 
@@ -83,7 +102,16 @@ async function request(endpoint, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(data.error || `Request failed with status ${response.status}`);
+    const errorMsg =
+      data.error ||
+      (response.status === 401
+        ? 'Authentication session expired. Please log in again.'
+        : response.status === 403
+        ? 'Access denied to this conversation.'
+        : response.status === 404
+        ? 'Resource not found on server.'
+        : `Request failed with status ${response.status}`);
+    throw new Error(errorMsg);
   }
 
   return data;

@@ -651,7 +651,15 @@ const thirdPartyUser = { id: 'usr_third_party' };
 const isNonParticipantAllowed = convBeforeExit.participants.includes(thirdPartyUser.id);
 assert.strictEqual(isNonParticipantAllowed, false, 'Non-participants must be rejected from summarizing private conversations');
 
-// 3. Valid 1-to-1 summary generation
+// 3. Conversation resolution via findByParticipants
+const resolvedConvByUsers = conversations.findByParticipants(user1.id, user2.id);
+assert.ok(resolvedConvByUsers, 'conversations.findByParticipants must find conversation by participants');
+assert.strictEqual(resolvedConvByUsers.id, convBeforeExit.id);
+const resolvedReversed = conversations.findByParticipants(user2.id, user1.id);
+assert.ok(resolvedReversed, 'conversations.findByParticipants must work regardless of user order');
+assert.strictEqual(resolvedReversed.id, convBeforeExit.id);
+
+// 4. Valid 1-to-1 summary generation
 const valid1to1Summary = localNlpSummarize(
   messages.find((m) => m.conversationId === convBeforeExit.id),
   user2.displayName,

@@ -156,3 +156,4 @@ export default function ChatSphere3DHero({ size = 'default' }) {
     </div>
   );
 }
+

@@ -67,9 +67,20 @@ initializeFirebase();
 // Try to auto-load backend Firebase config if local is default placeholder
 if (typeof window !== 'undefined' && !isFirebaseConfigured()) {
   const isDev = window.location.port === '5173' || window.location.port === '3000';
-  const apiUrl = import.meta.env.VITE_API_URL || (isDev ? 'http://localhost:5000/api' : `${window.location.origin}/api`);
-  
-  fetch(`${apiUrl}/auth/firebase-config`)
+  const custom = (() => {
+    try {
+      return localStorage.getItem('chatsphere_backend_url');
+    } catch {
+      return null;
+    }
+  })();
+  const rawApi = custom || import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL;
+  let backendHost = isDev ? 'http://localhost:5000' : 'https://chatsphere-backend-jqnf.onrender.com';
+  if (rawApi && rawApi.trim()) {
+    backendHost = rawApi.trim().replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  }
+
+  fetch(`${backendHost}/api/auth/firebase-config`)
     .then((r) => r.json())
     .then((data) => {
       if (data && data.configured && data.config) {
