@@ -90,7 +90,7 @@ export default function App() {
   }
 
   // Pending Registration State: Incomplete users must strictly complete all 8 mandatory fields before accessing dashboard, chats, or channels
-  if (!user.profileCompleted || showOnboarding) {
+  if (!user?.profileCompleted || showOnboarding) {
     return <OnboardingModal isOpen={true} />;
   }
 

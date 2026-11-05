@@ -6,47 +6,37 @@ const bcrypt = require('bcryptjs');
 const { users, channels, conversations, messages, sanitizeUser } = require('../db');
 const { authMiddleware } = require('../auth');
 const { generateSummary } = require('../aiSummary');
+const { UPLOADS_DIR, verifyPhotoStored } = require('../photoValidation');
 
 const router = express.Router();
-
-// Setup Multer for media & profile picture uploads
-const UPLOADS_DIR = path.join(__dirname, '..', '..', 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) {
-  fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, UPLOADS_DIR);
   },
   filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
+    const ext = path.extname(file.originalname).toLowerCase();
     const uniqueName = `upload-${Date.now()}-${Math.round(Math.random() * 1e9)}${ext}`;
     cb(null, uniqueName);
   }
 });
 
 const fileFilter = (req, file, cb) => {
-  const allowedTypes = [
-    'image/jpeg',
-    'image/jpg',
-    'image/png',
-    'image/webp',
-    'image/gif',
-    'application/pdf',
-    'text/plain'
-  ];
-  if (allowedTypes.includes(file.mimetype.toLowerCase()) || file.mimetype.startsWith('image/')) {
+  const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  const ext = path.extname(file.originalname).toLowerCase();
+  const allowedExts = ['.jpg', '.jpeg', '.png', '.webp'];
+
+  if (allowedMimes.includes(file.mimetype.toLowerCase()) && allowedExts.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error('Supported formats: JPG, JPEG, PNG, WEBP, GIF, PDF, TXT'));
+    cb(new Error('Unsupported file format. Please upload JPG, JPEG, PNG, or WEBP image.'));
   }
 };
 
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 20 * 1024 * 1024 } // 20MB
+  limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
 });
 
 // Helper to enrich message with sender details
@@ -90,17 +80,25 @@ function requireCompletedProfile(req, res, next) {
 // ==========================================
 // 1. FILE & PROFILE PHOTO UPLOAD API
 // ==========================================
-router.post('/upload', upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ error: 'No file uploaded' });
-  }
+router.post('/upload', (req, res) => {
+  upload.single('file')(req, res, (err) => {
+    if (err) {
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ error: 'File size exceeds limit of 5MB. Please upload a smaller image.' });
+      }
+      return res.status(400).json({ error: err.message || 'File upload failed' });
+    }
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
 
-  const fileUrl = `/uploads/${req.file.filename}`;
-  res.json({
-    url: fileUrl,
-    filename: req.file.originalname,
-    mimetype: req.file.mimetype,
-    size: req.file.size
+    const fileUrl = `/uploads/${req.file.filename}`;
+    return res.json({
+      url: fileUrl,
+      filename: req.file.originalname,
+      mimetype: req.file.mimetype,
+      size: req.file.size
+    });
   });
 });
 
@@ -189,7 +187,9 @@ router.put('/users/profile', (req, res) => {
     }
     const existing = users.findByEmail(cleanEmail);
     if (existing && existing.id !== currentUserId) {
-      return res.status(400).json({ error: 'This email is already registered to another account' });
+      return res.status(400).json({
+        error: 'This email address is already registered. Please log in using your existing account.'
+      });
     }
     updates.email = cleanEmail;
   }
@@ -203,7 +203,9 @@ router.put('/users/profile', (req, res) => {
     }
     const existing = users.findByMobile(cleanPhone);
     if (existing && existing.id !== currentUserId) {
-      return res.status(400).json({ error: 'This contact number is already registered to another account' });
+      return res.status(400).json({
+        error: 'This contact number is already registered with another account. Please use a different number.'
+      });
     }
     updates.mobileNumber = cleanPhone;
   }
@@ -218,8 +220,11 @@ router.put('/users/profile', (req, res) => {
     updates.dob = dob.trim();
   }
 
-  // 7. Profile Photo
+  // 7. Profile Photo (compulsory validation)
   if (avatar !== undefined) {
+    if (avatar && !verifyPhotoStored(avatar)) {
+      return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
+    }
     updates.avatar = avatar.trim();
   }
 
@@ -258,7 +263,9 @@ router.put('/users/profile', (req, res) => {
     if (!finalDob?.trim()) return res.status(400).json({ error: 'Date of Birth is mandatory.' });
     if (!finalPhone?.trim()) return res.status(400).json({ error: 'Contact Number is mandatory.' });
     if (!finalEmail?.trim()) return res.status(400).json({ error: 'Email Address is mandatory.' });
-    if (!finalAvatar?.trim()) return res.status(400).json({ error: 'Profile photo upload is compulsory.' });
+    if (!verifyPhotoStored(finalAvatar)) {
+      return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
+    }
     if (!Array.isArray(finalInterests) || finalInterests.length === 0) {
       return res.status(400).json({ error: 'Interests must contain at least one selection.' });
     }
@@ -271,7 +278,7 @@ router.put('/users/profile', (req, res) => {
     finalPhone?.trim() &&
     finalGender?.trim() &&
     finalDob?.trim() &&
-    finalAvatar?.trim() &&
+    verifyPhotoStored(finalAvatar) &&
     Array.isArray(finalInterests) && finalInterests.length > 0
   );
 
@@ -282,12 +289,18 @@ router.put('/users/profile', (req, res) => {
   delete updates.createdAt;
   delete updates.id;
 
-  const updatedUser = users.update(currentUserId, updates);
-
-  res.json({
-    message: 'Profile updated successfully',
-    user: sanitizeUser(updatedUser, currentUserId)
-  });
+  try {
+    const updatedUser = users.update(currentUserId, updates);
+    res.json({
+      message: 'Profile updated successfully',
+      user: sanitizeUser(updatedUser, currentUserId)
+    });
+  } catch (err) {
+    if (err.name === 'DuplicateKeyError') {
+      return res.status(400).json({ error: err.message });
+    }
+    throw err;
+  }
 });
 
 // DELETE /api/users/account - Delete user account with 10-day restriction

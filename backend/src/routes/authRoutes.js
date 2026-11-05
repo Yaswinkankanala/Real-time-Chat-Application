@@ -2,6 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { users, sanitizeUser, generateUniqueCode } = require('../db');
 const { signToken, authMiddleware, verifyFirebaseIdToken } = require('../auth');
+const { verifyPhotoStored } = require('../photoValidation');
 
 const router = express.Router();
 
@@ -18,6 +19,7 @@ function isValidPhoneNumber(phone) {
  * Helper to check if all 8 mandatory fields are satisfied
  */
 function checkProfileCompleted(user) {
+  if (!user) return false;
   return Boolean(
     user.displayName?.trim() &&
     user.username?.trim() &&
@@ -25,7 +27,7 @@ function checkProfileCompleted(user) {
     user.dob?.trim() &&
     user.mobileNumber?.trim() &&
     user.email?.trim() &&
-    user.avatar?.trim() &&
+    verifyPhotoStored(user.avatar) &&
     Array.isArray(user.interests) && user.interests.length > 0
   );
 }
@@ -83,32 +85,42 @@ router.post('/register', async (req, res) => {
 
     // 2. Prevent duplicate username
     if (users.findByUsername(cleanUsername)) {
-      return res.status(400).json({ error: 'Username is already taken. Please choose another.' });
+      return res.status(400).json({ error: 'This username is already taken by another user.' });
     }
 
-    // 3. Prevent duplicate email
+    // 3. Prevent duplicate email (exact required error string)
     if (users.findByEmail(cleanEmail)) {
-      return res.status(400).json({ error: 'An account with this email address already exists.' });
+      return res.status(400).json({
+        error: 'This email address is already registered. Please log in using your existing account.'
+      });
     }
 
-    // 4. Prevent duplicate contact number
+    // 4. Prevent duplicate contact number (exact required error string)
     if (users.findByMobile(cleanPhone)) {
-      return res.status(400).json({ error: 'This contact number is already registered with another account.' });
+      return res.status(400).json({
+        error: 'This contact number is already registered with another account. Please use a different number.'
+      });
     }
 
-    // 5. Generate secure password hash
+    // 5. Mandatory Profile Photo Check (if avatar was passed during registration)
+    let validatedAvatar = '';
+    if (avatar && typeof avatar === 'string' && avatar.trim()) {
+      if (!verifyPhotoStored(avatar)) {
+        return res.status(400).json({ error: 'Profile photo is required. Please upload a photo to continue.' });
+      }
+      validatedAvatar = avatar.trim();
+    }
+
+    // 6. Generate secure password hash
     const salt = bcrypt.genSaltSync(10);
     const passwordHash = bcrypt.hashSync(password, salt);
 
-    // 6. Generate automatic permanent unique alphanumeric identification code (e.g. CS8K92A)
+    // 7. Generate automatic permanent unique alphanumeric identification code (e.g. CS8K92A)
     const uniqueCode = generateUniqueCode();
 
     const cleanInterests = Array.isArray(interests)
       ? interests.map((i) => String(i).trim()).filter(Boolean)
       : [];
-
-    const defaultAvatar = avatar?.trim() ||
-      `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(displayName.trim())}`;
 
     const newUser = {
       id: `usr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
@@ -120,7 +132,7 @@ router.post('/register', async (req, res) => {
       mobileNumber: cleanPhone,
       gender: gender?.trim() || '',
       dob: dob?.trim() || '',
-      avatar: defaultAvatar,
+      avatar: validatedAvatar,
       bio: '',
       interests: cleanInterests,
       notificationsEnabled: true,
@@ -133,7 +145,14 @@ router.post('/register', async (req, res) => {
     // Check if user immediately completed all 8 mandatory fields
     newUser.profileCompleted = checkProfileCompleted(newUser);
 
-    users.create(newUser);
+    try {
+      users.create(newUser);
+    } catch (dbErr) {
+      if (dbErr.name === 'DuplicateKeyError') {
+        return res.status(400).json({ error: dbErr.message });
+      }
+      throw dbErr;
+    }
     const token = signToken(newUser);
 
     return res.status(201).json({
@@ -249,6 +268,8 @@ router.post('/verify', async (req, res) => {
         finalUsername = `${base}_${suffix}`;
       }
 
+      const initialAvatar = verifyPhotoStored(picture) ? picture : '';
+
       user = {
         id: `usr_${uid.substring(0, 8)}_${Math.random().toString(36).substring(2, 6)}`,
         uniqueCode: generateUniqueCode(),
@@ -257,7 +278,7 @@ router.post('/verify', async (req, res) => {
         email: cleanEmail,
         displayName: requestedDisplayName || name || finalUsername,
         passwordHash: 'firebase_oauth_protected',
-        avatar: picture || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(finalUsername)}`,
+        avatar: initialAvatar,
         dob: '',
         mobileNumber: '',
         gender: '',
@@ -270,7 +291,14 @@ router.post('/verify', async (req, res) => {
         createdAt: new Date().toISOString()
       };
 
-      users.create(user);
+      try {
+        users.create(user);
+      } catch (dbErr) {
+        if (dbErr.name === 'DuplicateKeyError') {
+          return res.status(400).json({ error: dbErr.message });
+        }
+        throw dbErr;
+      }
     } else {
       const updates = {};
       if (!user.firebaseUid) {
@@ -278,6 +306,9 @@ router.post('/verify', async (req, res) => {
       }
       if (!user.uniqueCode) {
         updates.uniqueCode = generateUniqueCode();
+      }
+      if (!user.avatar && verifyPhotoStored(picture)) {
+        updates.avatar = picture;
       }
       if (Object.keys(updates).length > 0) {
         user = users.update(user.id, updates) || user;

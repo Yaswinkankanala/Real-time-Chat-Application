@@ -89,7 +89,7 @@ export const AuthProvider = ({ children }) => {
         const userData = res?.user || res;
         if (userData && userData.id) {
           setUser(userData);
-          if (!userData.profileCompleted) {
+          if (!userData?.profileCompleted) {
             setShowOnboarding(true);
           }
         } else {
@@ -246,7 +246,7 @@ export const AuthProvider = ({ children }) => {
     const res = await api.updateProfile(updates);
     if (res && res.user) {
       setUser(res.user);
-      if (res.user.profileCompleted) {
+      if (res.user?.profileCompleted) {
         setShowOnboarding(false);
       }
       return res.user;

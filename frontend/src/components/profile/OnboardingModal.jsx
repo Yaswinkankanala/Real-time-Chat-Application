@@ -48,6 +48,14 @@ export default function OnboardingModal({ isOpen }) {
 
   useEffect(() => {
     if (user) {
+      // Only keep existing avatar if it's a valid non-placeholder photo (e.g. valid Google picture or uploaded file)
+      const isPlaceholder = !user.avatar ||
+        user.avatar.includes('dicebear.com') ||
+        user.avatar.includes('placeholder') ||
+        user.avatar.includes('default-avatar');
+
+      const initialAvatar = isPlaceholder ? '' : user.avatar;
+
       setFormData({
         displayName: user.displayName || '',
         username: user.username || '',
@@ -55,11 +63,11 @@ export default function OnboardingModal({ isOpen }) {
         dob: user.dob || '',
         mobileNumber: user.mobileNumber || '',
         gender: user.gender || '',
-        avatar: user.avatar || '',
+        avatar: initialAvatar,
         bio: user.bio || '',
         interests: Array.isArray(user.interests) && user.interests.length > 0 ? user.interests : []
       });
-      setPreviewAvatar(user.avatar || '');
+      setPreviewAvatar(initialAvatar);
     }
   }, [user]);
 
@@ -77,9 +85,19 @@ export default function OnboardingModal({ isOpen }) {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const validFormats = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (!validFormats.includes(file.mimetype) && !file.type.startsWith('image/')) {
-      setError('Please select a valid image (JPG, JPEG, PNG, WEBP).');
+    const validMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    const ext = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
+    const validExts = ['.jpg', '.jpeg', '.png', '.webp'];
+
+    if (!validMimes.includes(file.type.toLowerCase()) && !validExts.includes(ext)) {
+      setError('Unsupported file format. Please upload JPG, JPEG, PNG, or WEBP image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      setError('File size exceeds limit of 5MB. Please upload a smaller image.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -93,10 +111,16 @@ export default function OnboardingModal({ isOpen }) {
     setError('');
     try {
       const uploadRes = await api.uploadFile(file);
+      if (!uploadRes?.url) {
+        throw new Error('Upload response did not return a valid file URL');
+      }
       setFormData((prev) => ({ ...prev, avatar: uploadRes.url }));
       setPreviewAvatar(uploadRes.url);
     } catch (err) {
       setError('Failed to upload image: ' + err.message);
+      setFormData((prev) => ({ ...prev, avatar: '' }));
+      setPreviewAvatar('');
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } finally {
       setUploadingAvatar(false);
     }
@@ -166,7 +190,11 @@ export default function OnboardingModal({ isOpen }) {
       return;
     }
     if (!formData.avatar && !previewAvatar) {
-      setError('Profile photo upload is compulsory. Please select or upload a photo.');
+      setError('Profile photo is required. Please upload a photo to continue.');
+      return;
+    }
+    if (!formData.avatar) {
+      setError('Profile photo is required. Please upload a photo to continue.');
       return;
     }
     if (!formData.interests || formData.interests.length === 0) {
@@ -255,11 +283,17 @@ export default function OnboardingModal({ isOpen }) {
           {/* Profile Photo */}
           <div className="p-3.5 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 flex items-center gap-4">
             <div className="relative shrink-0">
-              <img
-                src={previewAvatar || `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(formData.displayName || 'User')}`}
-                alt="Profile Preview"
-                className="w-14 h-14 rounded-full object-cover ring-2 ring-indigo-500/40"
-              />
+              {previewAvatar ? (
+                <img
+                  src={previewAvatar}
+                  alt="Profile Preview"
+                  className="w-14 h-14 rounded-full object-cover ring-2 ring-indigo-500/40"
+                />
+              ) : (
+                <div className="w-14 h-14 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center ring-2 ring-dashed ring-slate-300 dark:ring-slate-600">
+                  <Camera className="w-6 h-6 text-slate-400" />
+                </div>
+              )}
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
@@ -275,7 +309,7 @@ export default function OnboardingModal({ isOpen }) {
               <input
                 ref={fileInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/jpg"
+                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                 onChange={handleFileChange}
                 className="hidden"
               />
@@ -290,8 +324,11 @@ export default function OnboardingModal({ isOpen }) {
                 ) : (
                   <Upload className="w-3 h-3 text-indigo-500" />
                 )}
-                <span>{uploadingAvatar ? 'Uploading...' : 'Choose from device'}</span>
+                <span>{uploadingAvatar ? 'Uploading...' : previewAvatar ? 'Change Photo' : 'Upload Photo'}</span>
               </button>
+              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-1">
+                Compulsory. Allowed: JPG, JPEG, PNG, WEBP (Max 5MB)
+              </p>
             </div>
           </div>
 

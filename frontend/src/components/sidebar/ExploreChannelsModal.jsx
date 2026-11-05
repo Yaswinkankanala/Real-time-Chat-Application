@@ -307,3 +307,4 @@ export default function ExploreChannelsModal({ isOpen, onClose, channels = [], o
     </div>
   );
 }
+

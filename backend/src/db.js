@@ -179,18 +179,60 @@ function sanitizeUser(user, viewerId = null) {
   };
 }
 
+// Database-level normalization and error types
+class DuplicateKeyError extends Error {
+  constructor(field, message) {
+    super(message);
+    this.name = 'DuplicateKeyError';
+    this.field = field;
+    this.code = 11000;
+  }
+}
+
+function normalizeEmail(email) {
+  if (!email || typeof email !== 'string') return '';
+  return email.trim().toLowerCase();
+}
+
+function normalizePhone(phone) {
+  if (!phone || typeof phone !== 'string') return '';
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/[^0-9]/g, '');
+  if (!digits) return '';
+  return trimmed.startsWith('+') ? `+${digits}` : digits;
+}
+
+function arePhonesMatching(phone1, phone2) {
+  if (!phone1 || !phone2) return false;
+  const d1 = String(phone1).replace(/[^0-9]/g, '');
+  const d2 = String(phone2).replace(/[^0-9]/g, '');
+  if (!d1 || !d2) return false;
+  if (d1 === d2) return true;
+  // If one has country code prefix (e.g. +91 9876543210 vs 9876543210)
+  if (d1.length >= 10 && d2.length >= 10) {
+    if (d1.slice(-10) === d2.slice(-10)) return true;
+  }
+  return false;
+}
+
 module.exports = {
   db,
   saveDatabase,
   sanitizeUser,
   generateUniqueCode,
+  normalizeEmail,
+  normalizePhone,
+  arePhonesMatching,
+  DuplicateKeyError,
   users: {
     find: (predicate) => (predicate ? db.users.filter(predicate) : db.users),
     findOne: (predicate) => db.users.find(predicate),
     findById: (id) => db.users.find((u) => u.id === id),
     findByEmail: (email) => {
       if (!email) return null;
-      return db.users.find((u) => u.email?.toLowerCase() === email.trim().toLowerCase());
+      const clean = normalizeEmail(email);
+      if (!clean) return null;
+      return db.users.find((u) => normalizeEmail(u.email) === clean);
     },
     findByFirebaseUid: (uid) => {
       if (!uid) return null;
@@ -198,22 +240,48 @@ module.exports = {
     },
     findByUsername: (username) => {
       if (!username) return null;
-      return db.users.find((u) => u.username?.toLowerCase() === username.trim().toLowerCase());
+      const clean = (username || '').trim().toLowerCase();
+      return db.users.find((u) => (u.username || '').trim().toLowerCase() === clean);
     },
     findByMobile: (mobileNumber) => {
       if (!mobileNumber) return null;
-      const clean = mobileNumber.replace(/[^0-9]/g, '');
-      return db.users.find((u) => {
-        if (!u.mobileNumber) return false;
-        const uClean = u.mobileNumber.replace(/[^0-9]/g, '');
-        return uClean === clean || u.mobileNumber.trim() === mobileNumber.trim();
-      });
+      return db.users.find((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, mobileNumber));
     },
     findByUniqueCode: (code) => {
       if (!code) return null;
       return db.users.find((u) => u.uniqueCode?.toUpperCase() === code.trim().toUpperCase());
     },
     create: (user) => {
+      // 1. Enforce unique normalized email constraint at database model level
+      if (user.email) {
+        const normEmail = normalizeEmail(user.email);
+        if (normEmail && db.users.some((u) => normalizeEmail(u.email) === normEmail)) {
+          throw new DuplicateKeyError(
+            'email',
+            'This email address is already registered. Please log in using your existing account.'
+          );
+        }
+        user.email = normEmail;
+      }
+
+      // 2. Enforce unique normalized contact number constraint at database model level
+      if (user.mobileNumber) {
+        if (db.users.some((u) => u.mobileNumber && arePhonesMatching(u.mobileNumber, user.mobileNumber))) {
+          throw new DuplicateKeyError(
+            'mobileNumber',
+            'This contact number is already registered with another account. Please use a different number.'
+          );
+        }
+      }
+
+      // 3. Enforce unique username constraint at database model level
+      if (user.username) {
+        const normUser = (user.username || '').trim().toLowerCase();
+        if (normUser && db.users.some((u) => (u.username || '').trim().toLowerCase() === normUser)) {
+          throw new DuplicateKeyError('username', 'This username is already taken by another user.');
+        }
+      }
+
       if (!user.uniqueCode) {
         user.uniqueCode = generateUniqueCode();
       }
@@ -230,6 +298,36 @@ module.exports = {
     update: (id, updates) => {
       const idx = db.users.findIndex((u) => u.id === id);
       if (idx !== -1) {
+        // Enforce unique email check if updating email
+        if (updates.email) {
+          const normEmail = normalizeEmail(updates.email);
+          if (normEmail && db.users.some((u) => u.id !== id && normalizeEmail(u.email) === normEmail)) {
+            throw new DuplicateKeyError(
+              'email',
+              'This email address is already registered. Please log in using your existing account.'
+            );
+          }
+          updates.email = normEmail;
+        }
+
+        // Enforce unique contact number check if updating phone
+        if (updates.mobileNumber) {
+          if (db.users.some((u) => u.id !== id && u.mobileNumber && arePhonesMatching(u.mobileNumber, updates.mobileNumber))) {
+            throw new DuplicateKeyError(
+              'mobileNumber',
+              'This contact number is already registered with another account. Please use a different number.'
+            );
+          }
+        }
+
+        // Enforce unique username check if updating username
+        if (updates.username) {
+          const normUser = (updates.username || '').trim().toLowerCase();
+          if (normUser && db.users.some((u) => u.id !== id && (u.username || '').trim().toLowerCase() === normUser)) {
+            throw new DuplicateKeyError('username', 'This username is already taken by another user.');
+          }
+        }
+
         // Protect uniqueCode and createdAt from being modified
         delete updates.uniqueCode;
         delete updates.createdAt;

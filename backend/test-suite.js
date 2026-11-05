@@ -1,7 +1,10 @@
 const assert = require('assert');
 const bcrypt = require('bcryptjs');
-const { db, saveDatabase, users, channels, conversations, messages, generateUniqueCode, sanitizeUser } = require('./src/db');
+const fs = require('fs');
+const path = require('path');
+const { db, saveDatabase, users, channels, conversations, messages, generateUniqueCode, sanitizeUser, DuplicateKeyError, normalizeEmail, normalizePhone } = require('./src/db');
 const { checkProfileCompleted, isValidPhoneNumber } = require('./src/routes/authRoutes');
+const { verifyPhotoStored, UPLOADS_DIR } = require('./src/photoValidation');
 const { generateSummary, localNlpSummarize } = require('./src/aiSummary');
 
 console.log('🧪 Starting ChatSphere Comprehensive Test Suite...\n');
@@ -312,6 +315,157 @@ assert.strictEqual(vignanChannel.passcode, undefined, 'Plaintext passcode must N
 assert.ok(vignanChannel.passcodeHash, 'passcodeHash must be present');
 assert.strictEqual(channels.isMember('chan_vignan', user2.id), false, 'Bob should not be a member of Vignan by default');
 console.log('✅ Test 19 Passed: Vignan channel passcode is securely hashed and not exposed.\n');
+
+// Test 20: Prevent Duplicate Email Registration (Database-level and exact message)
+console.log('Test 20: Verifying Duplicate Email Rejection...');
+let emailErrorThrown = false;
+try {
+  users.create({
+    id: 'usr_dup_email',
+    displayName: 'Duplicate Email User',
+    username: 'dupemailuser',
+    email: ' ALICE@test.com ', // Same as user1.email, tested with spaces and uppercase
+    passwordHash: 'hash',
+    mobileNumber: '+919999900001'
+  });
+} catch (err) {
+  emailErrorThrown = true;
+  assert.strictEqual(err.name, 'DuplicateKeyError');
+  assert.strictEqual(
+    err.message,
+    'This email address is already registered. Please log in using your existing account.'
+  );
+}
+assert.ok(emailErrorThrown, 'Attempting to register existing email must throw DuplicateKeyError');
+console.log('✅ Test 20 Passed: Duplicate email rejected with exact error message.\n');
+
+// Test 21: Prevent Duplicate Contact Number Registration (Database-level and exact message)
+console.log('Test 21: Verifying Duplicate Contact Number Rejection...');
+let phoneErrorThrown = false;
+try {
+  users.create({
+    id: 'usr_dup_phone',
+    displayName: 'Duplicate Phone User',
+    username: 'dupphoneuser',
+    email: 'newuser@test.com',
+    passwordHash: 'hash',
+    mobileNumber: '9876543210' // Same digits as user1 (+919876543210)
+  });
+} catch (err) {
+  phoneErrorThrown = true;
+  assert.strictEqual(err.name, 'DuplicateKeyError');
+  assert.strictEqual(
+    err.message,
+    'This contact number is already registered with another account. Please use a different number.'
+  );
+}
+assert.ok(phoneErrorThrown, 'Attempting to register existing contact number must throw DuplicateKeyError');
+console.log('✅ Test 21 Passed: Duplicate contact number rejected with exact error message.\n');
+
+// Test 22: Mandatory Profile Photo Validation
+console.log('Test 22: Verifying Profile Photo Validation and Rejection of Placeholders...');
+// Empty / null
+assert.strictEqual(verifyPhotoStored(''), false, 'Empty avatar string must be rejected');
+assert.strictEqual(verifyPhotoStored(null), false, 'Null avatar must be rejected');
+// Placeholder avatar
+assert.strictEqual(
+  verifyPhotoStored('https://api.dicebear.com/7.x/initials/svg?seed=Alice'),
+  false,
+  'Dicebear placeholder must be rejected'
+);
+// Non-existent upload path
+assert.strictEqual(
+  verifyPhotoStored('/uploads/nonexistent-avatar.jpg'),
+  false,
+  'Nonexistent local file upload must be rejected'
+);
+
+// Create real dummy test image in uploads dir
+const testImgPath = path.join(UPLOADS_DIR, 'test-suite-photo.jpg');
+fs.writeFileSync(testImgPath, Buffer.from('fake-image-bytes'));
+assert.strictEqual(
+  verifyPhotoStored('/uploads/test-suite-photo.jpg'),
+  true,
+  'Existing uploaded photo on disk must be accepted'
+);
+// External Google URL
+assert.strictEqual(
+  verifyPhotoStored('https://lh3.googleusercontent.com/a/ACg8ocKQ=s96-c'),
+  true,
+  'Valid Google profile picture URL must be accepted'
+);
+// Clean up test image
+fs.unlinkSync(testImgPath);
+console.log('✅ Test 22 Passed: Profile photo strictly validated, placeholders and broken files rejected.\n');
+
+// Test 23: Complete Profile Verification with All 8 Mandatory Fields
+console.log('Test 23: Verifying checkProfileCompleted with all 8 mandatory fields...');
+const dummyPhotoPath = path.join(UPLOADS_DIR, 'test-profile-check.png');
+fs.writeFileSync(dummyPhotoPath, Buffer.from('png-bytes'));
+
+const validUserObj = {
+  displayName: 'Full Tester',
+  username: 'fulltester',
+  gender: 'Female',
+  dob: '2000-01-01',
+  mobileNumber: '+919988776655',
+  email: 'full@tester.com',
+  avatar: '/uploads/test-profile-check.png',
+  interests: ['Tech & Coding']
+};
+assert.strictEqual(checkProfileCompleted(validUserObj), true, 'All 8 valid fields must return true');
+
+// Missing photo
+assert.strictEqual(
+  checkProfileCompleted({ ...validUserObj, avatar: '' }),
+  false,
+  'Missing photo must return false'
+);
+// Dicebear placeholder photo
+assert.strictEqual(
+  checkProfileCompleted({ ...validUserObj, avatar: 'https://api.dicebear.com/7.x/initials/svg?seed=Test' }),
+  false,
+  'Placeholder photo must return false'
+);
+// Empty interests
+assert.strictEqual(
+  checkProfileCompleted({ ...validUserObj, interests: [] }),
+  false,
+  'Empty interests array must return false'
+);
+fs.unlinkSync(dummyPhotoPath);
+console.log('✅ Test 23 Passed: Account completion strictly requires all 8 valid fields.\n');
+
+// Test 24: Profile Update Duplicate Protection
+console.log('Test 24: Verifying Profile Update Duplicate Email & Phone Prevention...');
+let updateEmailDup = false;
+try {
+  users.update(user2.id, { email: user1.email });
+} catch (err) {
+  updateEmailDup = true;
+  assert.strictEqual(
+    err.message,
+    'This email address is already registered. Please log in using your existing account.'
+  );
+}
+assert.ok(updateEmailDup, 'Updating email to another user\'s email must throw DuplicateKeyError');
+
+let updatePhoneDup = false;
+try {
+  users.update(user2.id, { mobileNumber: user1.mobileNumber });
+} catch (err) {
+  updatePhoneDup = true;
+  assert.strictEqual(
+    err.message,
+    'This contact number is already registered with another account. Please use a different number.'
+  );
+}
+assert.ok(updatePhoneDup, 'Updating phone to another user\'s phone must throw DuplicateKeyError');
+
+// Keeping own email and phone must succeed
+const updatedSelf = users.update(user2.id, { email: user2.email, mobileNumber: user2.mobileNumber });
+assert.ok(updatedSelf, 'Updating with own existing email/phone must succeed without error');
+console.log('✅ Test 24 Passed: Profile update enforces duplicate prevention while allowing retention of own info.\n');
 
 // Reset database back to clean initial state for production
 console.log('Cleaning test artifacts from database...');
